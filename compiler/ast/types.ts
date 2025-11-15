@@ -126,10 +126,12 @@ export interface ModelDefinition {
   extensions: ExtensionDefinition[];
 }
 
+export type SupportedDb = 'postgres' | 'sqlite' | 'mysql';
+
 export interface ForgeConfig {
   domain: string[];
   outDir: string;
-  db: 'postgres';
+  db: SupportedDb;
   dialect: 'postgres-rds'; // for future use
   audit: boolean;
   multiTenant: boolean;

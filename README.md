@@ -11,6 +11,7 @@ laforge/
   cli/            # forge CLI entrypoint + commands
   examples/       # sample domains
   tests/          # vitest suite
+  docs/           # handbook and deep dives
 ```
 
 ## Quickstart
@@ -101,6 +102,8 @@ hook Post.beforeCreate {
 - `forge compile <domain-file>` – validate and compile a domain definition.
 - `forge generate <domain-file>` – emit SQL, services, routes, and migrations under `<domain>/generated` (or `--out`).
 - `forge diff <old-domain> <new-domain>` – show schema-aware diffs between two domain definitions (`--json` available).
+- `forge migrate` – apply pending migrations under `.laforge/migrations` (supports `--dry-run`, `--check`, `--to`).
+- `forge status` – show applied vs. pending migrations.
 - `forge test` – run the Vitest suite.
 
 All commands run locally in Node.js—no browser or DOM runtime required.
@@ -154,6 +157,35 @@ Produces a stable JSON payload:
   - Migration still runs for safe changes.
 - Destructive mode: set `"migrations": { "allowDestructive": true }` in config
   - Full DROP/TYPE changes are emitted.
+
+## Migration baseline and state
+
+LaForge persists schema state and migrations in `.laforge/`:
+
+```
+.laforge/
+  schema.json          # last known schema snapshot
+  migrations/
+    20250201_150203_add_field.sql
+    state.json         # applied migration log
+```
+
+`forge generate` compares the current domain to `schema.json`, writes the next migration into `.laforge/migrations/`, and updates the snapshot. `forge migrate` applies pending migrations to the target database (SQLite by default, configurable with `--db`). `forge status` reports applied vs. pending.
+
+CI examples:
+- `forge migrate --check` fails if pending migrations exist.
+- `forge migrate --dry-run` shows pending migrations without applying.
+
+## Handbook
+
+Full docs live at `docs/HANDBOOK.md`:
+- Why LaForge exists and architecture overview
+- DSL guide and compiler pipeline
+- Migration workflow and state files
+- Multi-DB adapters (Postgres, MySQL, SQLite)
+- CLI commands and examples
+- Plugin guide (lifecycle/events/output hooks)
+- Runtime API overview
 
 ## Guarantees
 

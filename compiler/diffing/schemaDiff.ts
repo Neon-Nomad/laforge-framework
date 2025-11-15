@@ -1,4 +1,4 @@
-import type { ModelDefinition, FieldOptions, FieldType, RelationDef } from '../ast/types.js';
+import type { ModelDefinition, FieldOptions, FieldType, RelationDef, SupportedDb } from '../ast/types.js';
 import pc from 'picocolors';
 
 export type ColumnInfo = {
@@ -49,28 +49,66 @@ export const schemaDiffJsonSchema = {
 const toSnakeCase = (str: string): string =>
   str.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`).replace(/^_/, '');
 
-export const mapTypeToSql = (fieldType: FieldType): string => {
-  switch (fieldType) {
-    case 'uuid':
-      return 'UUID';
-    case 'string':
-      return 'VARCHAR(255)';
-    case 'text':
-      return 'TEXT';
-    case 'integer':
-      return 'INTEGER';
-    case 'boolean':
-      return 'BOOLEAN';
-    case 'datetime':
-      return 'TIMESTAMP WITH TIME ZONE';
-    case 'jsonb':
-      return 'JSONB';
-    default:
-      return 'VARCHAR(255)';
+export const mapTypeToSql = (fieldType: FieldType, db: SupportedDb = 'postgres'): string => {
+  switch (db) {
+    case 'mysql':
+      switch (fieldType) {
+        case 'uuid':
+          return 'CHAR(36)';
+        case 'string':
+          return 'VARCHAR(255)';
+        case 'text':
+          return 'TEXT';
+        case 'integer':
+          return 'INT';
+        case 'boolean':
+          return 'TINYINT(1)';
+        case 'datetime':
+          return 'DATETIME';
+        case 'jsonb':
+          return 'JSON';
+        default:
+          return 'VARCHAR(255)';
+      }
+    case 'sqlite':
+      switch (fieldType) {
+        case 'uuid':
+        case 'string':
+        case 'text':
+        case 'jsonb':
+          return 'TEXT';
+        case 'integer':
+          return 'INTEGER';
+        case 'boolean':
+          return 'INTEGER';
+        case 'datetime':
+          return 'TEXT';
+        default:
+          return 'TEXT';
+      }
+    default: // postgres
+      switch (fieldType) {
+        case 'uuid':
+          return 'UUID';
+        case 'string':
+          return 'VARCHAR(255)';
+        case 'text':
+          return 'TEXT';
+        case 'integer':
+          return 'INTEGER';
+        case 'boolean':
+          return 'BOOLEAN';
+        case 'datetime':
+          return 'TIMESTAMP WITH TIME ZONE';
+        case 'jsonb':
+          return 'JSONB';
+        default:
+          return 'VARCHAR(255)';
+      }
   }
 };
 
-function normalizeColumns(model: ModelDefinition): ColumnInfo[] {
+function normalizeColumns(model: ModelDefinition, db: SupportedDb): ColumnInfo[] {
   const columns: ColumnInfo[] = [];
   for (const [fieldName, value] of Object.entries(model.schema)) {
     if (typeof value === 'object' && (value as any).__typeName === 'Relation') {
@@ -85,7 +123,7 @@ function normalizeColumns(model: ModelDefinition): ColumnInfo[] {
       name,
       fieldName,
       type: opts.type,
-      sqlType: mapTypeToSql(opts.type),
+      sqlType: mapTypeToSql(opts.type, db),
       optional: opts.optional === true,
       default: opts.default,
       primaryKey: opts.primaryKey,
@@ -94,11 +132,11 @@ function normalizeColumns(model: ModelDefinition): ColumnInfo[] {
   return columns;
 }
 
-function normalizeModels(models: ModelDefinition[]): Map<string, ColumnInfo[]> {
+function normalizeModels(models: ModelDefinition[], db: SupportedDb): Map<string, ColumnInfo[]> {
   const tableMap = new Map<string, ColumnInfo[]>();
   for (const model of models) {
     const table = `${toSnakeCase(model.name)}s`;
-    tableMap.set(table, normalizeColumns(model));
+    tableMap.set(table, normalizeColumns(model, db));
   }
   return tableMap;
 }
@@ -154,12 +192,12 @@ function tableSimilarity(a: ColumnInfo[], b: ColumnInfo[]): number {
   return intersection / union;
 }
 
-export function computeSchemaDiff(oldModels: ModelDefinition[], newModels: ModelDefinition[]): SchemaDiffResult {
+export function computeSchemaDiff(oldModels: ModelDefinition[], newModels: ModelDefinition[], db: SupportedDb = 'postgres'): SchemaDiffResult {
   const operations: SchemaOperation[] = [];
   const warnings: string[] = [];
 
-  const oldTables = normalizeModels(oldModels);
-  const newTables = normalizeModels(newModels);
+  const oldTables = normalizeModels(oldModels, db);
+  const newTables = normalizeModels(newModels, db);
   const oldFks = extractForeignKeys(oldModels);
   const newFks = extractForeignKeys(newModels);
 

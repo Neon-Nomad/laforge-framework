@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
-import { generateMigrations } from '../compiler/diffing/migrationGenerator.js';
-import type { ModelDefinition } from '../compiler/ast/types.js';
+import { generateMigrations } from '../packages/compiler/diffing/migrationGenerator.js';
+import type { ModelDefinition } from '../packages/compiler/ast/types.js';
 
 test('SQL generator produces tables and constraints', () => {
   const models: ModelDefinition[] = [

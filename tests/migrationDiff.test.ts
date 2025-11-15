@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
-import { compileForSandbox } from '../compiler/index.js';
-import { diffSql } from '../compiler/diffing/sqlDiff.js';
+import { compileForSandbox } from '../packages/compiler/index.js';
+import { diffSql } from '../packages/compiler/diffing/sqlDiff.js';
 
 test('migration diff highlights schema changes', () => {
   const v1 = compileForSandbox(`

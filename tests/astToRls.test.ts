@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
-import { generateRlsPolicies } from '../compiler/rls/astToRls.js';
-import { compileForSandbox } from '../compiler/index.js';
+import { generateRlsPolicies } from '../packages/compiler/rls/astToRls.js';
+import { compileForSandbox } from '../packages/compiler/index.js';
 
 function compileRls(dsl: string, multiTenant = false): string {
   const compiled = compileForSandbox(dsl);

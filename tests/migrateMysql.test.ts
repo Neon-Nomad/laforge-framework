@@ -3,8 +3,8 @@ import { describe, expect, test, vi } from 'vitest';
 const execSpy = vi.fn();
 const closeSpy = vi.fn();
 
-vi.mock('../runtime/db/mysql.js', async () => {
-  const actual = await vi.importActual<any>('../runtime/db/mysql.js');
+vi.mock('../packages/runtime/db/mysql.js', async () => {
+  const actual = await vi.importActual<any>('../packages/runtime/db/mysql.js');
   return {
     ...actual,
     MySQLConnection: vi.fn(function MockMySQL(this: any) {
@@ -20,7 +20,7 @@ vi.mock('../runtime/db/mysql.js', async () => {
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { generateIncrementalMigration, applyMigrations } from '../cli/lib/persistence.js';
+import { generateIncrementalMigration, applyMigrations } from '../packages/cli/lib/persistence.js';
 
 const domainV1 = `
 model User {

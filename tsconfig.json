@@ -14,6 +14,6 @@
     "allowSyntheticDefaultImports": true,
     "types": ["node", "vitest"]
   },
-  "include": ["compiler/**/*", "runtime/**/*", "cli/**/*"],
+  "include": ["packages/**/*"],
   "exclude": ["dist", "node_modules", "examples/**/*", "tests/**/*"]
 }

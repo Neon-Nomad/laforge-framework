@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
-import { LaForgeRuntime } from '../runtime/index.js';
-import type { DatabaseConnection } from '../runtime/db/database.js';
+import { LaForgeRuntime } from '../packages/runtime/index.js';
+import type { DatabaseConnection } from '../packages/runtime/db/database.js';
 
 const createRuntime = () => {
   const dummyDb: Partial<DatabaseConnection> = {

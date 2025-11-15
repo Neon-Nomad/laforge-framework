@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { parseForgeDsl } from '../compiler/index.js';
+import { parseForgeDsl } from '../packages/compiler/index.js';
 
 test('parses models, fields, and relations into the AST', () => {
   const models = parseForgeDsl(`

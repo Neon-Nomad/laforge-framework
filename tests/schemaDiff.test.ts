@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
-import { computeSchemaDiff, formatSchemaDiff } from '../compiler/diffing/schemaDiff.js';
-import type { ModelDefinition } from '../compiler/ast/types.js';
+import { computeSchemaDiff, formatSchemaDiff } from '../packages/compiler/diffing/schemaDiff.js';
+import type { ModelDefinition } from '../packages/compiler/ast/types.js';
 
 const model = (name: string, schema: Record<string, any>): ModelDefinition => ({
   name,

@@ -2,8 +2,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { expect, test } from 'vitest';
-import { compileForSandbox } from '../compiler/index.js';
-import { writeCompilationOutput } from '../cli/commands/utils.js';
+import { compileForSandbox } from '../packages/compiler/index.js';
+import { writeCompilationOutput } from '../packages/cli/commands/utils.js';
 
 test('forge compile end-to-end produces generated assets', async () => {
   const examplePath = path.resolve('examples/simple-blog/domain.ts');

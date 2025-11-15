@@ -8,7 +8,7 @@ vi.mock('mysql2/promise', () => ({
   createPool: () => ({ query: querySpy, end: endSpy }),
 }));
 
-import { MySQLConnection } from '../runtime/db/mysql.js';
+import { MySQLConnection } from '../packages/runtime/db/mysql.js';
 
 beforeEach(() => {
   querySpy.mockClear();

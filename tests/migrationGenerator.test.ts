@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
-import { generateMigrations } from '../compiler/diffing/migrationGenerator.js';
-import type { ModelDefinition } from '../compiler/ast/types.js';
+import { generateMigrations } from '../packages/compiler/diffing/migrationGenerator.js';
+import type { ModelDefinition } from '../packages/compiler/ast/types.js';
 
 const model = (name: string, schema: Record<string, any>, relations = []): ModelDefinition => ({
   name,

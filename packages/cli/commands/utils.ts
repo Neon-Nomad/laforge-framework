@@ -34,6 +34,10 @@ export async function writeCompilationOutput(
 
   const written: string[] = [];
 
+  const compiledPath = path.join(baseOut, 'compiled.json');
+  await fs.writeFile(compiledPath, JSON.stringify(output, null, 2), 'utf8');
+  written.push(compiledPath);
+
   const schemaPath = path.join(sqlDir, 'schema.sql');
   await fs.writeFile(schemaPath, output.sql);
   written.push(schemaPath);

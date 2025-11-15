@@ -1,0 +1,44 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build outputs
+dist/
+build/
+out/
+.cache/
+.temp/
+tmp/
+*.tsbuildinfo
+
+# Logs
+logs/
+*.log
+
+# Environment
+.env
+*.env
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Backend generated files
+backend/db/*.sqlite
+backend/db/*.sqlite-journal
+backend/db/migrations/
+
+# Frontend build artifacts
+frontend/dist/
+frontend/.vite/
+frontend/node_modules/
+
+# Temp files from LaForge codegen
+**/.laforge-cache/
+**/generated/
+**/sandbox-temp/

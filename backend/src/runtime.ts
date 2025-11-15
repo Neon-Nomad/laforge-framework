@@ -4,6 +4,7 @@ import { DatabaseConnection } from './database.js';
 import { v4 as uuidv4 } from 'uuid';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { createRequire } from 'node:module';
 
 export interface UserContext {
   id: string;
@@ -37,6 +38,8 @@ export class AuditLogger {
     this.logs = [];
   }
 }
+
+const nodeRequire = createRequire(import.meta.url);
 
 export class LaForgeRuntime {
   private db: DatabaseConnection;
@@ -114,17 +117,39 @@ export class LaForgeRuntime {
     return this.compiledCode;
   }
 
-  // Evaluate generated code in a safe context
+  // Evaluate generated code in a safe sandboxed context
   private evaluateModule(code: string, dependencies: string[]): { exports: any } {
+    const normalize = (name: string) => (name === 'sql' ? './sql' : name);
+    const allowedModules = new Set(['zod', './zod', './sql']);
+    for (const dependency of dependencies || []) {
+      const normalizedDependency = normalize(dependency);
+      if (!allowedModules.has(normalizedDependency)) {
+        throw new Error(`Sandbox dependency "${dependency}" is not permitted.`);
+      }
+    }
+
+    const safeRequire = (request: string) => {
+      const normalizedRequest = normalize(request);
+      if (!allowedModules.has(normalizedRequest)) {
+        throw new Error(`Blocked require: ${request}`);
+      }
+      if (normalizedRequest === 'zod') {
+        return nodeRequire('zod');
+      }
+      if (normalizedRequest === './zod') {
+        return this.zodSchemas || {};
+      }
+      if (normalizedRequest === './sql') {
+        return this.sqlQueries || {};
+      }
+      throw new Error(`Unhandled require: ${request}`);
+    };
+
+    const moduleExports: any = {};
+    const moduleObject = { exports: moduleExports };
     const sandbox: any = {
-      exports: {},
-      module: { exports: {} },
-      require: (name: string) => {
-        if (name === 'zod') return require('zod');
-        if (name === './zod') return this.zodSchemas || {};
-        if (name === './sql') return this.sqlQueries || {};
-        throw new Error(`Blocked require: ${name}`);
-      },
+      exports: moduleExports,
+      module: moduleObject,
       console,
       Date,
       String,
@@ -136,17 +161,21 @@ export class LaForgeRuntime {
       Math,
       Promise,
       Error,
+      Set,
+      Map,
+      RegExp,
       AuthorizationError: class extends Error {
         constructor(message: string) {
           super(message);
           this.name = 'AuthorizationError';
         }
-      }
+      },
+      // Block sensitive globals
+      Buffer: undefined,
+      process: undefined,
     };
     sandbox.global = sandbox;
     sandbox.globalThis = sandbox;
-    sandbox.process = undefined;
-    sandbox.Buffer = undefined;
 
     vm.createContext(sandbox);
 
@@ -158,22 +187,31 @@ export class LaForgeRuntime {
           esModuleInterop: true,
         },
       });
-      const wrapperCode = `
-        (function(exports, module, require, console, global, globalThis) {
-          "use strict";
-          ${transpiled.outputText}
-          return module.exports;
-        })
-      `;
+      let sanitizedCode = transpiled.outputText.replace(/^\uFEFF+/, '');
+      sanitizedCode = sanitizedCode.replace(/^#!.*(\r?\n)/, '');
+      sanitizedCode = sanitizedCode.replace(/^[\s\x00-\x1F]+/, '');
+
+      if (/^require\(/m.test(sanitizedCode)) {
+        throw new Error('Disallowed top-level require() detected before the sandbox wrapper.');
+      }
+
+      const wrapperParts = [
+        '(function(exports, module, require, console, global, globalThis) {',
+        '"use strict";',
+        sanitizedCode,
+        'return module.exports;',
+        '})'
+      ];
+      const wrapperCode = wrapperParts.join('\n');
       const script = new vm.Script(wrapperCode, { filename: 'laforge-generated.js' });
       const fn = script.runInContext(sandbox);
       const result = fn(
         sandbox.exports,
         sandbox.module,
-        sandbox.require,
+        safeRequire,
         sandbox.console,
-        sandbox,
-        sandbox
+        sandbox.global,
+        sandbox.globalThis
       );
       return { exports: result || sandbox.module.exports };
     } catch (error: any) {

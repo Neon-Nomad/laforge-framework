@@ -14,6 +14,8 @@ export interface CompilationOutput {
     rls: string;
     routes: string;
     models: ModelDefinition[]; // Pass the raw models for the runtime
+    zodSchemas?: string;
+    sqlQueries?: string;
 }
 
 export interface CompilationResult {
@@ -201,14 +203,19 @@ export function compileForSandbox(code: string): CompilationOutput {
         const rlsResult = generateRlsPolicies(allModels, defaultConfig);
         const routesResult = generateFastifyAdapter(allModels);
 
+        const boundSql = migrationResult.map(m => m.content).join('\n\n---\n\n');
         return {
             ast: ast,
             zod: zodResult.content,
-            sql: migrationResult.map(m => m.content).join('\n\n---\n\n'),
+            sql: boundSql,
             domain: domainResult.content,
             rls: rlsResult,
             routes: routesResult.content,
             models: allModels,
+
+            // Required by runtime.ts
+            zodSchemas: zodResult.content,
+            sqlQueries: boundSql,
         };
 
     } catch (error: any) {

@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
-    "build": "tsc"
+    "build": "tsc",
+    "test": "vitest run"
   },
   "dependencies": {
     "fastify": "^4.25.1",
@@ -24,6 +25,7 @@
     "@types/better-sqlite3": "^7.6.8",
     "@types/uuid": "^9.0.7",
     "@types/babel__traverse": "^7.18.4",
-    "tsx": "^4.7.0"
+    "tsx": "^4.7.0",
+    "vitest": "^4.0.9"
   }
 }

@@ -1,5 +1,5 @@
 
-import { ModelDefinition, FieldOptions, FieldType, RelationType } from './types';
+import { ModelDefinition, FieldOptions, FieldType } from './types';
 import { GenerationResult } from './types';
 
 function toPascalCase(str: string): string {
@@ -29,8 +29,8 @@ function mapTypeToZod(fieldType: string | FieldOptions): string {
       zodType = 'z.date()';
       break;
     case 'jsonb':
-        zodType = 'z.any()';
-        break;
+      zodType = 'z.any()';
+      break;
     default:
       zodType = 'z.unknown()';
   }
@@ -43,13 +43,13 @@ function mapTypeToZod(fieldType: string | FieldOptions): string {
 }
 
 export function generateZodSchemas(models: ModelDefinition[]): GenerationResult {
+  const zHeader = 'const z = require("zod").z;\n';
+
   const schemas = models.map(model => {
     const schemaName = `${toPascalCase(model.name)}Schema`;
     const createSchemaName = `Create${toPascalCase(model.name)}Schema`;
     const updateSchemaName = `Update${toPascalCase(model.name)}Schema`;
 
-    // FIX: Filter out relation fields before processing, as they don't belong in Zod schemas
-    // and were causing type errors when trying to access properties like 'tenant' or 'primaryKey'.
     const modelFields = Object.entries(model.schema)
       .filter(([, value]) => value && !(typeof value === 'object' && (value as any).__typeName === 'Relation')) as [string, FieldType | FieldOptions][];
 
@@ -63,22 +63,21 @@ export function generateZodSchemas(models: ModelDefinition[]): GenerationResult 
     const createFields = modelFields
       .filter(([name]) => name !== primaryKeyField && name !== 'createdAt' && name !== 'updatedAt' && name !== tenantField)
       .map(([name, type]) => {
-         const fieldOptions = typeof type === 'object' ? type : { type };
-         // Make fields optional if they have a default value
-         const isOptional = (typeof type === 'object' && type.default) ? { ...fieldOptions, optional: true } : type;
-         return `  ${name}: ${mapTypeToZod(isOptional)},`
+        const fieldOptions = typeof type === 'object' ? type : { type };
+        const needsOptional = typeof type === 'object' && type.default;
+        const isOptional = needsOptional ? { ...fieldOptions, optional: true } : type;
+        return `  ${name}: ${mapTypeToZod(isOptional)},`;
       })
       .join('\n');
 
     const updateFields = modelFields
       .filter(([name]) => name !== primaryKeyField && name !== 'createdAt' && name !== 'updatedAt' && name !== tenantField)
       .map(([name, type]) => {
-         const fieldOptions = typeof type === 'object' ? type : { type };
-         const optionalType = { ...fieldOptions, optional: true };
-         return `  ${name}: ${mapTypeToZod(optionalType)},`
+        const fieldOptions = typeof type === 'object' ? type : { type };
+        const optionalType = { ...fieldOptions, optional: true };
+        return `  ${name}: ${mapTypeToZod(optionalType)},`;
       })
       .join('\n');
-
 
     return `
 export const ${schemaName} = z.object({
@@ -100,8 +99,7 @@ export type Update${toPascalCase(model.name)} = z.infer<typeof ${updateSchemaNam
   }).join('\n');
 
   const content = `
-import { z } from 'zod';
-
+${zHeader}
 ${schemas}
 `;
 

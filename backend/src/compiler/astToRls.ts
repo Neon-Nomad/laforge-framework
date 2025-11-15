@@ -39,7 +39,22 @@ function compilePolicyToSql(source: string, model: ModelDefinition): string {
   });
 
   if (!expressionNode) {
-    throw new Error('Could not find a valid expression in the policy handler.');
+    const body = source.trim();
+    if (body === 'true') {
+      return 'TRUE';
+    }
+    if (body === 'false') {
+      return 'FALSE';
+    }
+    const simpleBinary = body.match(/^record\.(\w+)\s*==\s*["']([^"']+)["']$/);
+    if (simpleBinary) {
+      const [, field, value] = simpleBinary;
+      if (!model.schema.hasOwnProperty(field)) {
+        throw new Error(`Property "${field}" not found in model "${model.name}" schema during RLS generation.`);
+      }
+      return `${toSnakeCase(field)} = '${value.replace(/'/g, "''")}'`;
+    }
+    throw new Error(`Could not find a valid expression in the policy handler: ${body}`);
   }
 
   return nodeToSql(expressionNode, model);
@@ -95,7 +110,9 @@ function nodeToSql(node: t.Node, model: ModelDefinition): string {
           case 'role': return "current_setting('app.user_role')";
           default: throw new Error(`Unsupported user property: ${propertyName}`);
         }
-      } else if (objectName === 'record') {
+      }
+
+      if (objectName === 'record' || objectName === 'input') {
         if (!model.schema.hasOwnProperty(propertyName)) {
             throw new Error(`Property "${propertyName}" not found in model "${model.name}" schema during RLS generation.`);
         }

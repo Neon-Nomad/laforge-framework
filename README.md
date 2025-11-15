@@ -1,414 +1,177 @@
-# 🔥 LaForge Full-Stack Sandbox
+# LaForge
 
-## THE REAL DEAL - LaForge Actually Running!
+LaForge is a policy-first backend compiler that generates schemas, RLS policies, services, routes, and migrations from a single domain definition.
 
-This is **NOT a simulation**. This is the REAL LaForge backend compiler generating code and executing it against a real database.
-
-### What This Proves
-
-✅ **LaForge Compiler Works** - Generates real, runnable code  
-✅ **Policies Actually Enforce** - RLS and application-level security work  
-✅ **Hooks Actually Execute** - Lifecycle events run in real-time  
-✅ **Multi-Tenancy Actually Works** - Data isolation is real  
-✅ **Production Ready** - This is how LaForge works in production  
-
-## Architecture
+## Project Layout
 
 ```
-┌─────────────────┐         ┌──────────────────┐         ┌────────────┐
-│   Frontend      │         │   LaForge        │         │  SQLite    │
-│   (React+MUI)   │────────▶│   Backend        │────────▶│  Database  │
-│                 │   HTTP  │   (Fastify)      │   SQL   │            │
-│  - DSL Editor   │         │                  │         │  - Tables  │
-│  - Output Tabs  │         │  - Compiler      │         │  - Records │
-│  - Runtime UI   │         │  - Runtime       │         │  - Queries │
-└─────────────────┘         │  - Domain Svcs   │         └────────────┘
-                            └──────────────────┘
-                                     │
-                            ┌────────▼────────┐
-                            │  Generated Code │
-                            │  Actually Runs! │
-                            │                 │
-                            │  • Zod schemas  │
-                            │  • SQL queries  │
-                            │  • Policies     │
-                            │  • Hooks        │
-                            │  • Domain logic │
-                            └─────────────────┘
+laforge/
+  compiler/       # AST, parser, codegen, SQL, RLS, diffing
+  runtime/        # DB adapters, HTTP runtime, validation hooks
+  cli/            # forge CLI entrypoint + commands
+  examples/       # sample domains
+  tests/          # vitest suite
 ```
 
-## Quick Start
+## Quickstart
 
-### Prerequisites
-- Node.js 18+
-- Two terminal windows
-
-### Installation & Running
-
-**Terminal 1 - Backend:**
-```bash
-cd backend
+```
 npm install
-npm run dev
+npm run build
+
+# Compile a domain (no files written)
+forge compile examples/simple-blog/domain.ts
+
+# Generate artifacts
+forge generate examples/simple-blog/domain.ts
+ls examples/simple-blog/generated
+
+# Run tests
+npm test
+
+# CLI help
+forge --help
 ```
 
-You'll see:
-```
-🔥 LaForge Backend Server Starting...
-✨ Server ready!
-📍 Endpoints available
-🌐 http://localhost:3001
-```
+## DSL Example
 
-**Terminal 2 - Frontend:**
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-You'll see:
-```
-VITE ready in XXX ms
-➜ Local: http://localhost:5173
-```
-
-**Open browser:**
-```
-http://localhost:5173
-```
-
-## How It Works
-
-### 1. Write DSL (Frontend)
-```forge
+```ts
 model User {
   id: uuid pk
   tenantId: uuid tenant
   email: string
-  role: string default "user"
+  role: string
 }
 
-policy User.read {
-  ({ user, record }) => record.id === user.id || user.role === 'admin'
+model Post {
+  id: uuid pk
+  tenantId: uuid tenant
+  title: string
+  body: text
+  author: belongsTo(User)
+}
+
+policy Post.read {
+  record.tenantId == user.tenantId || user.role === "admin"
+}
+
+hook Post.beforeCreate {
+  record.slug = record.title.toLowerCase().replace(/\s+/g, '-')
 }
 ```
 
-### 2. Click "Compile DSL"
+## Example Output
 
-**What happens:**
+- **SQL schema**
+  ```sql
+  CREATE TABLE IF NOT EXISTS posts (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    body TEXT NOT NULL,
+    author_id UUID
+  );
+  ```
+- **RLS policy**
+  ```sql
+  CREATE POLICY post_read_tenant_scope
+  ON posts
+  USING ((tenant_id = current_setting('app.tenant_id')::uuid));
+  ```
+- **Zod types**
+  ```ts
+  export const PostSchema = zod.object({
+    id: zod.string().uuid(),
+    tenantId: zod.string().uuid(),
+    title: zod.string(),
+    body: zod.string(),
+    authorId: zod.string().uuid().optional(),
+  });
+  ```
+- **Migration**
+  ```sql
+  -- migrations/20240101010101_initial_schema.sql
+  CREATE TABLE IF NOT EXISTS users (...);
+  CREATE TABLE IF NOT EXISTS posts (...);
+  ALTER TABLE posts ADD CONSTRAINT fk_posts_author_id ...
+  ```
+
+## CLI Commands
+
+- `forge compile <domain-file>` – validate and compile a domain definition.
+- `forge generate <domain-file>` – emit SQL, services, routes, and migrations under `<domain>/generated` (or `--out`).
+- `forge diff <old-domain> <new-domain>` – show schema-aware diffs between two domain definitions (`--json` available).
+- `forge test` – run the Vitest suite.
+
+All commands run locally in Node.js—no browser or DOM runtime required.
+
+## Schema-aware diff engine
+
+- Detects table/column adds, drops, renames.
+- Tracks type, nullability, and default changes.
+- Detects foreign key adds/removals/changes.
+- Emits safe-mode warnings when destructive changes are blocked.
+
+## Using `forge diff`
+
 ```
-Frontend sends DSL to backend
-        ↓
-Backend runs REAL LaForge compiler
-        ↓
-Generates:
-  • Zod validation schemas
-  • SQL CREATE TABLE statements
-  • PostgreSQL RLS policies (converted to SQLite)
-  • TypeScript domain service classes
-  • Fastify API route handlers
-        ↓
-Backend executes SQL to create tables
-        ↓
-Backend loads domain services into memory
-        ↓
-Returns all generated code to frontend
-```
-
-### 3. Go to Runtime Tab
-
-**What happens:**
-```
-User creates a record
-        ↓
-Frontend calls: POST /api/execute
-        ↓
-Backend uses GENERATED domain service
-        ↓
-Domain service:
-  1. Validates with Zod (generated)
-  2. Checks policy (generated)
-  3. Runs beforeCreate hook (generated)
-  4. Executes SQL INSERT (generated)
-  5. Runs afterCreate hook (generated)
-        ↓
-Real SQLite database stores the record
-        ↓
-Backend returns result + audit log
-        ↓
-Frontend displays the real result
-```
-
-## What's REAL vs What Was Simulated
-
-### Before (Client-Side Simulation)
-- ❌ Fake in-memory database (JavaScript Map)
-- ❌ Simulated policy evaluation (mocked)
-- ❌ Simulated hooks (not really running)
-- ❌ No actual SQL execution
-- ❌ Generated code not actually used
-
-### Now (Real Backend)
-- ✅ Real database (SQLite)
-- ✅ REAL LaForge-generated domain services
-- ✅ REAL policy enforcement (generated code)
-- ✅ REAL hooks execution (generated code)
-- ✅ REAL SQL queries (generated by LaForge)
-- ✅ REAL Zod validation (generated by LaForge)
-
-## Testing the Real Backend
-
-### Test 1: Create a User
-1. Go to Runtime tab
-2. Model: User
-3. Operation: Create
-4. Fill: `email: "test@example.com"`, `role: "user"`
-5. Click "Create User"
-
-**Watch the backend terminal:**
-```
-🔥 Compiling DSL with LaForge...
-✅ Compiled 1 models
-📊 Creating database schema...
-✅ Database schema created
-🎯 Executing create on User as user user-123 (user)
-✅ Operation successful
+forge diff examples/old-blog/domain.ts examples/simple-blog/domain.ts
 ```
 
-**This is REAL LaForge running!**
-
-### Test 2: Policy Enforcement
-1. Create a User with `id: user-456`
-2. Try to read it as `user-123`
-3. See policy deny it (not authorized)
-4. Switch role to "Admin"
-5. Try again - success!
-
-**The backend terminal shows:**
+Sample output (colors enabled in TTY):
 ```
-🎯 Executing findById on User as user user-123 (user)
-❌ Operation failed: User does not have permission to read this User
++ add table posts (id UUID, title VARCHAR(255), author_id UUID)
+~ rename column posts.title -> headline
+~ alter nullability posts.body: nullable -> not_null
+! drop column posts.temp_value
 ```
 
-**Real policy enforcement!**
+## CI examples with `--json`
 
-### Test 3: Hooks
-1. Create a Post
-2. Leave `published` empty
-3. Watch the `beforeCreate` hook set it to `false`
-
-**Backend shows:**
 ```
-🎯 Executing create on Post
-✅ beforeCreate hook executed
-✅ Operation successful
+forge diff --json examples/old-blog/domain.ts examples/simple-blog/domain.ts
 ```
 
-**Real hooks executing!**
-
-## API Endpoints
-
-### POST /api/compile
-Compile DSL using LaForge compiler
-
-**Request:**
+Produces a stable JSON payload:
 ```json
 {
-  "dsl": "model User { ... }"
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "output": {
-    "ast": "...",
-    "zod": "...",
-    "sql": "...",
-    "domain": "...",
-    "rls": "...",
-    "routes": "...",
-    "models": [...]
-  }
-}
-```
-
-### POST /api/execute
-Execute CRUD operation using generated code
-
-**Request:**
-```json
-{
-  "modelName": "User",
-  "operation": "create",
-  "user": {
-    "id": "user-123",
-    "tenantId": "tenant-abc",
-    "role": "user"
+  "schema": {
+    "operations": [
+      { "kind": "addTable", "table": "posts", "columns": ["... trimmed ..."] },
+      { "kind": "renameColumn", "table": "posts", "from": "title", "to": "headline" }
+    ],
+    "warnings": []
   },
-  "data": {
-    "email": "test@example.com"
-  }
+  "sqlDiff": "+ ALTER TABLE posts RENAME COLUMN title TO headline;"
 }
 ```
 
-**Response:**
-```json
-{
-  "success": true,
-  "data": {
-    "id": "...",
-    "email": "test@example.com",
-    ...
-  },
-  "auditLog": [...]
-}
-```
+## Destructive mode vs safe mode
 
-### GET /api/runtime/state
-Get current compiled models
+- Default: `migrations.allowDestructive = false`
+  - Table/column drops become warnings.
+  - Dangerous type changes are skipped with warnings.
+  - Migration still runs for safe changes.
+- Destructive mode: set `"migrations": { "allowDestructive": true }` in config
+  - Full DROP/TYPE changes are emitted.
 
-### GET /health
-Health check
+## Guarantees
 
-## Tech Stack
+- Zero-drift SQL + migrations derived from the same AST as generated code.
+- Reversible, timestamped migrations for safe deployment.
+- AST-verified RLS output to prevent policy injection.
+- Multi-tenant safe defaults (tenant isolation baked into schema and policies).
+- Generated domain services and routes aligned with the compiled schema.
 
-### Backend
-- **Fastify** - Web framework
-- **better-sqlite3** - In-memory SQL database
-- **LaForge Compiler** - The real deal
-- **TypeScript** - Type safety
-- **tsx** - Fast TypeScript execution
+## Roadmap to v1.0
 
-### Frontend
-- **React 18** - UI framework
-- **Material-UI v5** - Components
-- **Monaco Editor** - Code editor
-- **Vite** - Build tool
+- ✅ Backend-only compiler and runtime
+- ✅ CLI for compile/generate/diff/test
+- ✅ Simple example domain
+- 🚧 Harden parser, validation, and schema diff/migration pipeline
+- 🚧 Add more real-world examples and migration strategies
+- 🚧 Publish ecosystem tooling (language server, VS Code snippets)
 
-## Database
+## Contributing
 
-Uses **SQLite in-memory** for simplicity. In production, LaForge uses **PostgreSQL with RLS**.
-
-The backend automatically converts PostgreSQL syntax to SQLite:
-- `UUID` → `TEXT`
-- `TIMESTAMP WITH TIME ZONE` → `TEXT`
-- `JSONB` → `TEXT`
-- RLS policies → Application-level enforcement
-
-## What This Demonstrates
-
-### For Developers
-"This is how LaForge works. Write DSL, get a working backend."
-
-### For CTOs/Decision Makers
-"This proves LaForge can:
-- Generate production-ready code
-- Enforce security policies
-- Handle multi-tenancy
-- Execute business logic
-- Work with real databases
-- **Save your team months of development**"
-
-### For Investors
-"This is not vaporware. LaForge compiles and runs real backends."
-
-## Differences from Production
-
-| Feature | Sandbox | Production |
-|---------|---------|------------|
-| Database | SQLite in-memory | PostgreSQL persistent |
-| RLS | App-level (SQLite) | Database-level (Postgres) |
-| Deployment | Local (2 terminals) | Cloud (Docker/K8s) |
-| Scale | Demo/testing | Enterprise production |
-| Auth | Mock user context | Real JWT/OAuth |
-
-**But the CORE is the same:** LaForge compiles DSL → generates code → code runs!
-
-## Performance
-
-- **Compilation**: ~100-500ms (depends on model count)
-- **CRUD Operations**: ~5-20ms
-- **Policy Evaluation**: ~1-5ms
-- **Hook Execution**: ~1-10ms
-
-## Troubleshooting
-
-### Backend won't start
-```bash
-# Check if port 3001 is in use
-lsof -i :3001
-
-# Kill process if needed
-kill -9 <PID>
-```
-
-### Frontend can't connect to backend
-- Make sure backend is running on port 3001
-- Check CORS settings in `backend/src/server.ts`
-- Check browser console for errors
-
-### Compilation errors
-- Check backend terminal for detailed logs
-- Verify DSL syntax
-- Look for missing dependencies
-
-### Database errors
-- Backend uses in-memory DB (resets on restart)
-- Each compilation creates fresh schema
-- SQLite logs are in backend terminal
-
-## Next Steps
-
-### For Demo
-1. ✅ You're ready! Show this to customers
-2. Prepare your DSL examples
-3. Walk through: Write DSL → Compile → Test CRUD
-4. Show audit logs proving it works
-
-### For Production
-1. Replace SQLite with PostgreSQL
-2. Add persistent storage
-3. Implement real authentication
-4. Deploy to cloud (Railway, Render, AWS)
-5. Add monitoring & logging
-6. Scale horizontally
-
-## Files
-
-```
-backend/
-├── src/
-│   ├── server.ts       # Fastify server (main entry)
-│   ├── runtime.ts      # Executes generated code
-│   ├── database.ts     # SQLite wrapper
-│   └── compiler/       # LaForge compiler
-├── package.json
-└── tsconfig.json
-
-frontend/
-├── src/
-│   ├── App.tsx                   # Main app
-│   ├── components/
-│   │   ├── MonacoEditor.tsx      # Code editor
-│   │   └── RuntimeSimulation.tsx # Runtime UI
-│   └── compiler/
-│       └── types.ts              # Shared types
-├── package.json
-└── vite.config.ts
-```
-
-## Support
-
-- **Backend logs**: Check terminal 1 for detailed execution logs
-- **Frontend errors**: Check browser console (F12)
-- **Network issues**: Check browser Network tab
-- **Database issues**: Check backend SQLite logs
-
-## Credits
-
-Built to demonstrate that **LaForge actually works** and can **save companies millions** by automating backend development.
-
-**This is not a prototype. This is LaForge in action.** 🔥
+Issues and PRs are welcome. Please keep the repository backend-only—no DOM, React, or playground dependencies.

@@ -28,17 +28,10 @@ logs/
 .idea/
 *.swp
 
-# Backend generated files
-backend/db/*.sqlite
-backend/db/*.sqlite-journal
-backend/db/migrations/
-
-# Frontend build artifacts
-frontend/dist/
-frontend/.vite/
-frontend/node_modules/
-
-# Temp files from LaForge codegen
+# Generated files
+runtime/db/*.sqlite
+runtime/db/*.sqlite-journal
+runtime/db/migrations/
 **/.laforge-cache/
 **/generated/
 **/sandbox-temp/

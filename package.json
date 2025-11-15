@@ -1,5 +1,5 @@
 {
-  "name": "laforge",
+  "name": "@laforge-dev/core",
   "version": "1.0.0",
   "description": "LaForge is a policy-first backend compiler that generates schemas, RLS policies, services, routes, and migrations from a single domain definition.",
   "type": "module",

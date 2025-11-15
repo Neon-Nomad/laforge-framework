@@ -1,6 +1,25 @@
 # LaForge
 
-LaForge is a policy-first backend compiler that generates schemas, RLS policies, services, routes, and migrations from a single domain definition.
+LaForge: A Policy-First Backend Compiler for Serious Engineering Teams
+
+LaForge replaces traditional ORMs and schema-drift-prone backends by giving engineers a single source of truth: a domain DSL. From that DSL, LaForge deterministically generates:
+- SQL schema
+- RLS (Row-Level Security) policies
+- Zod validation schemas
+- Typed domain services
+- REST routes
+- Incremental migrations
+- A secure runtime for model-aware CRUD
+
+Core Guarantees (post-hardening)
+- Zero drift: AST = schema = code = migration.
+- Multi-DB consistency: Postgres/MySQL/SQLite align on UUIDs, JSON, uniques, and FK behavior.
+- Deterministic migrations: rename detection, type reversions via ALTER, and strict destructive-op blocking.
+- Security by default: policies validated at compile time; unsupported user refs rejected; template literals disallowed; duplicate policy conflicts detected.
+- Sandboxed runtime: `new Function()` blocked; `require('fs')` blocked; missing domain services or Zod exports fail fast.
+- Hardened tests: stress coverage for cycles, multi-hop FKs, cross-DB consistency, destructive-migration protection, sandbox isolation.
+
+LaForge is not an ORM. It’s a compiler for your backend.
 
 ## Project Layout
 
@@ -11,7 +30,6 @@ laforge/
   cli/            # forge CLI entrypoint + commands
   examples/       # sample domains
   tests/          # vitest suite
-  docs/           # handbook and deep dives
 ```
 
 ## Quickstart

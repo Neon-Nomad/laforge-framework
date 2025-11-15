@@ -2,8 +2,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { expect, test } from 'vitest';
-import { generateIncrementalMigration, applyMigrations, loadSnapshot, status } from '../packages/cli/lib/persistence.js';
-import { compileForSandbox } from '../packages/compiler/index.js';
+import { generateIncrementalMigration, applyMigrations, loadSnapshot, status } from '../packages/cli/lib/persistence.ts';
+import { compileForSandbox } from '../packages/compiler/index.ts';
 import { vi } from 'vitest';
 
 const domainV1 = `

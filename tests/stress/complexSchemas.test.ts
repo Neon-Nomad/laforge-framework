@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { compileForSandbox, parseForgeDsl } from '../../packages/compiler/index.js';
-import { generateMigrations } from '../../packages/compiler/diffing/migrationGenerator.js';
+import { compileForSandbox, parseForgeDsl } from '../../packages/compiler/index.ts';
+import { generateMigrations } from '../../packages/compiler/diffing/migrationGenerator.ts';
 
 describe('Stress: complex schemas', () => {
   test('detects cyclic relations instead of silently generating invalid FKs', () => {
@@ -32,7 +32,7 @@ model Company {
 
 model Team {
   id: uuid pk
-  companyId: uuid
+  company: belongsTo(Company)
   parentTeam: belongsTo(Team)
 }
 

@@ -11,6 +11,7 @@ function renderColumn(col: ColumnInfo): string {
   if (!col.optional) sql += ' NOT NULL';
   if (col.primaryKey) sql += ' PRIMARY KEY';
   if (col.default) sql += ` DEFAULT ${col.default}`;
+  if (col.unique) sql += ' UNIQUE';
   return sql;
 }
 
@@ -42,13 +43,13 @@ function baseRender(op: SchemaOperation, withSchema: (name: string) => string, o
       }
       return `ALTER TABLE ${withSchema(op.table)} ALTER COLUMN ${op.column} DROP DEFAULT;`;
     case 'addForeignKey':
-      return `ALTER TABLE ${withSchema(op.fk.table)} ADD CONSTRAINT ${constraintName(op.fk.table, op.fk.column)} FOREIGN KEY (${op.fk.column}) REFERENCES ${withSchema(op.fk.targetTable)}(${op.fk.targetColumn});`;
+      return `ALTER TABLE ${withSchema(op.fk.table)} ADD CONSTRAINT ${constraintName(op.fk.table, op.fk.column)} FOREIGN KEY (${op.fk.column}) REFERENCES ${withSchema(op.fk.targetTable)}(${op.fk.targetColumn})${op.fk.onDelete ? ` ON DELETE ${op.fk.onDelete.toUpperCase()}` : ''};`;
     case 'dropForeignKey':
       return `ALTER TABLE ${withSchema(op.fk.table)} DROP CONSTRAINT ${constraintName(op.fk.table, op.fk.column)};`;
     case 'alterForeignKey':
       return [
         `ALTER TABLE ${withSchema(op.from.table)} DROP CONSTRAINT ${constraintName(op.from.table, op.from.column)};`,
-        `ALTER TABLE ${withSchema(op.to.table)} ADD CONSTRAINT ${constraintName(op.to.table, op.to.column)} FOREIGN KEY (${op.to.column}) REFERENCES ${withSchema(op.to.targetTable)}(${op.to.targetColumn});`,
+        `ALTER TABLE ${withSchema(op.to.table)} ADD CONSTRAINT ${constraintName(op.to.table, op.to.column)} FOREIGN KEY (${op.to.column}) REFERENCES ${withSchema(op.to.targetTable)}(${op.to.targetColumn})${op.to.onDelete ? ` ON DELETE ${op.to.onDelete.toUpperCase()}` : ''};`,
       ].join('\n');
     default:
       return null;

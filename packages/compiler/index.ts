@@ -54,9 +54,52 @@ function toCamelCase(str: string): string {
     return pascal.charAt(0).toLowerCase() + pascal.slice(1);
 }
 
+function detectRelationCycles(models: ModelDefinition[]): void {
+    const graph = new Map<string, Set<string>>();
+    for (const model of models) {
+        const deps = new Set<string>();
+        for (const rel of model.relations) {
+            if (rel.type === 'belongsTo') {
+                if (rel.targetModelName === model.name) continue; // allow self-references without treating as cycles
+                deps.add(rel.targetModelName);
+            }
+        }
+        graph.set(model.name, deps);
+    }
+
+    const visited = new Set<string>();
+    const stack = new Set<string>();
+
+    const visit = (node: string) => {
+        if (stack.has(node)) {
+            const cycle = [...stack, node].join(' -> ');
+            throw new Error(`Cyclic relation detected: ${cycle}`);
+        }
+        if (visited.has(node)) return;
+        visited.add(node);
+        stack.add(node);
+        const neighbors = graph.get(node) || new Set<string>();
+        for (const neighbor of neighbors) {
+            if (graph.has(neighbor)) {
+                visit(neighbor);
+            }
+        }
+        stack.delete(node);
+    };
+
+    for (const name of graph.keys()) {
+        visit(name);
+    }
+}
+
 function parseModelFields(modelName: string, body: string): { schema: ModelSchema } {
     const schema: ModelSchema = {};
-    const lines = body.split('\n').map(l => l.trim()).filter(Boolean);
+    const lines = body
+        .split('\n')
+        .map(l => l.split(','))
+        .flat()
+        .map(l => l.trim())
+        .filter(Boolean);
 
     for (const line of lines) {
         // Skip relation lines for now, they are handled separately
@@ -67,12 +110,14 @@ function parseModelFields(modelName: string, body: string): { schema: ModelSchem
         const fieldMatch = line.match(/^(\w+):\s*(\w+)/);
         if (fieldMatch) {
             const [, name, type] = fieldMatch;
-            const options: FieldOptions = { type: type as FieldType };
+            const normalizedType = type === 'int' ? 'integer' : type;
+            const options: FieldOptions = { type: normalizedType as FieldType };
             const restOfLine = line.substring(fieldMatch[0].length).trim();
             
             if (restOfLine.includes('pk')) options.primaryKey = true;
             if (restOfLine.includes('tenant')) options.tenant = true;
             if (restOfLine.includes('optional')) options.optional = true;
+            if (restOfLine.includes('unique')) options.unique = true;
             
             const defaultMatch = restOfLine.match(/default\s+("([^"]*)"|'([^']*)'|([\w\(\)]+))/);
             if (defaultMatch) {
@@ -95,7 +140,12 @@ function parseModelFields(modelName: string, body: string): { schema: ModelSchem
 }
 
 function parseModelRelations(modelDef: ModelDefinition, body: string, allModels: Map<string, ModelDefinition>) {
-    const lines = body.split('\n').map(l => l.trim()).filter(Boolean);
+    const lines = body
+        .split('\n')
+        .map(l => l.split(','))
+        .flat()
+        .map(l => l.trim())
+        .filter(Boolean);
     
     for (const line of lines) {
         const relationMatch = line.match(/^(\w+):\s*(belongsTo|hasMany|manyToMany)\(["']?(\w+)["']?\)/);
@@ -111,14 +161,15 @@ function parseModelRelations(modelDef: ModelDefinition, body: string, allModels:
                 if (!modelDef.schema[foreignKey]) {
                     modelDef.schema[foreignKey] = { type: 'uuid' };
                 }
-                modelDef.relations.push({ name, type: 'belongsTo', targetModelName, foreignKey });
+                // Default to cascading deletes for belongsTo to avoid orphaned rows (can be made configurable later).
+                modelDef.relations.push({ name, type: 'belongsTo', targetModelName, foreignKey, onDelete: 'cascade' });
             } else if (type === 'hasMany') {
                 const remoteForeignKey = `${toCamelCase(modelDef.name)}Id`;
-                modelDef.relations.push({ name, type: 'hasMany', targetModelName, foreignKey: remoteForeignKey });
+                modelDef.relations.push({ name, type: 'hasMany', targetModelName, foreignKey: remoteForeignKey, onDelete: 'cascade' });
             } else if (type === 'manyToMany') {
                  const thisModelFk = `${toCamelCase(modelDef.name)}Id`;
                  const joinTableName = [modelDef.name, targetModelName].sort().join('_').toLowerCase() + 's';
-                 modelDef.relations.push({ name, type: 'manyToMany', targetModelName, foreignKey: thisModelFk, through: joinTableName });
+                 modelDef.relations.push({ name, type: 'manyToMany', targetModelName, foreignKey: thisModelFk, through: joinTableName, onDelete: 'cascade' });
             }
         }
     }
@@ -168,6 +219,9 @@ export function parseForgeDsl(code: string): ModelDefinition[] {
 
         if (type === 'policy') {
             const action = subTarget as PolicyAction;
+            if (modelDef.policies[action]) {
+                throw new Error(`Duplicate policy detected for ${modelName}.${action}`);
+            }
             modelDef.policies[action] = { action, handler: () => false, handlerSource: bodyContent };
         } else if (type === 'hook') {
             const hookType = subTarget as HookType;
@@ -210,6 +264,7 @@ export function compileForSandbox(code: string, config: Partial<ForgeConfig> = {
         if (allModels.length === 0) {
             throw new Error("Compilation failed: No models were defined. Check your syntax for `model YourModel { ... }`.");
         }
+        detectRelationCycles(allModels);
 
         const mergedConfig = { ...defaultConfig, ...config };
         const ast = JSON.stringify(allModels, null, 2);

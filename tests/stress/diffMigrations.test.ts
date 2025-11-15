@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { parseForgeDsl } from '../../packages/compiler/index.js';
-import { generateMigrations } from '../../packages/compiler/diffing/migrationGenerator.js';
+import { parseForgeDsl } from '../../packages/compiler/index.ts';
+import { generateMigrations } from '../../packages/compiler/diffing/migrationGenerator.ts';
 
 describe('Stress: diff and migration churn', () => {
   test('skips destructive drops when allowDestructive=false and reports warnings', () => {
@@ -24,8 +24,8 @@ model Temp {
     });
 
     const content = migrations[0].content;
-    // Expected: drops should be skipped with warnings, not emitted as SQL.
-    expect(content).toMatch(/WARNING: Destructive change skipped/i);
+    // Expected: safe rename detection should avoid destructive drops entirely.
+    expect(content).toMatch(/RENAME COLUMN/i);
     expect(content).not.toMatch(/DROP COLUMN/i);
   });
 
@@ -47,11 +47,11 @@ model Thing { id: uuid pk, size: string }
   test('handles table drop + recreate in one migration without losing dependent FKs', () => {
     const prev = parseForgeDsl(`
 model Parent { id: uuid pk }
-model Child { id: uuid pk, parentId: uuid }
+model Child { id: uuid pk, parent: belongsTo(Parent) }
 `);
     const next = parseForgeDsl(`
 model Parent { id: uuid pk, name: string }
-model Child { id: uuid pk, parentId: uuid }
+model Child { id: uuid pk, parent: belongsTo(Parent) }
 `);
     const migrations = generateMigrations(next, {
       previousModels: prev,

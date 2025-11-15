@@ -153,6 +153,9 @@ export class LaForgeRuntime {
     try {
       const zodModule = this.evaluateModule(compiledObject.zod, ['zod']);
       this.zodSchemas = zodModule.exports;
+      if (!this.zodSchemas || Object.keys(this.zodSchemas).length === 0) {
+        throw new Error('Empty Zod schema export: no schemas were generated');
+      }
       console.log(`Loaded ${Object.keys(this.zodSchemas).length} Zod schemas`);
     } catch (error: any) {
       console.error('Zod schema error:', error.message);
@@ -164,13 +167,16 @@ export class LaForgeRuntime {
       const domainSource = this.buildDomainModuleSource(compiledObject);
       const domainModule = this.evaluateModule(domainSource, ['zod', 'sql']);
       this.domainServices = domainModule.exports;
+      if (!this.domainServices || Object.keys(this.domainServices).length === 0) {
+        throw new Error('Domain services export missing or empty');
+      }
       console.log(`Loaded ${Object.keys(this.domainServices).length} domain services`);
     } catch (error: any) {
       console.error('Domain service error:', error.message);
       if (compiledObject.domain) {
         console.error('Generated code:', compiledObject.domain.substring(0, 500));
       }
-      throw error;
+      throw new Error('Domain services export missing or invalid');
     }
 
     return this.compiledCode!;
@@ -291,6 +297,7 @@ export class LaForgeRuntime {
       },
       Buffer: undefined,
       process: undefined,
+      Function: undefined,
     };
     sandbox.exports = sandbox.module.exports;
     sandbox.global = sandbox;
@@ -313,6 +320,9 @@ export class LaForgeRuntime {
       if (/^require\(/m.test(sanitizedCode)) {
         throw new Error('Disallowed top-level require() detected before the sandbox wrapper.');
       }
+      if (/new\s+Function\s*\(/i.test(sanitizedCode) || /\bFunction\s*\(/i.test(sanitizedCode)) {
+        throw new Error('Blocked Function constructor escape attempt.');
+      }
 
       const wrapperParts = [
         '(function(exports, module, require, console, global, globalThis) {',
@@ -332,7 +342,11 @@ export class LaForgeRuntime {
         sandbox.global,
         sandbox.globalThis,
       );
-      return { exports: result || sandbox.module.exports };
+      const exportsValue = result || sandbox.module.exports;
+      if (dependencies?.includes('zod') && exportsValue && Object.keys(exportsValue).length === 0) {
+        throw new Error('Empty schema export: no Zod schemas were returned');
+      }
+      return { exports: exportsValue };
     } catch (error: any) {
       console.error('Code evaluation error:', error.message);
       throw error;

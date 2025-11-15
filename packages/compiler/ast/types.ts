@@ -1,7 +1,7 @@
 
 // --- DSL Types ---
 
-export type FieldType = "uuid" | "string" | "text" | "integer" | "boolean" | "datetime" | "jsonb";
+export type FieldType = "uuid" | "string" | "text" | "integer" | "boolean" | "datetime" | "jsonb" | "json";
 
 export type RelationType = 'belongsTo' | 'hasMany' | 'manyToMany';
 
@@ -9,6 +9,7 @@ export interface Relation<T extends RelationType> {
     __typeName: 'Relation';
     type: T;
     targetModelName: string;
+    onDelete?: 'cascade' | 'restrict' | 'set null' | 'no action';
 }
 
 export interface FieldOptions {
@@ -17,6 +18,7 @@ export interface FieldOptions {
   tenant?: boolean;
   default?: string; // Raw SQL default value, e.g., "now()" or "uuid_generate_v4()"
   optional?: boolean;
+  unique?: boolean;
 }
 
 export type ModelSchema = Record<string, FieldType | FieldOptions | Relation<RelationType>>;
@@ -113,6 +115,7 @@ export interface RelationDef {
     targetModelName: string; // e.g., "User"
     foreignKey: string; // e.g., "authorId"
     through?: string; // For manyToMany, the join table name
+    onDelete?: 'cascade' | 'restrict' | 'set null' | 'no action';
 }
 
 export interface ModelDefinition {

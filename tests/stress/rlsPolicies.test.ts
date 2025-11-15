@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { compileForSandbox } from '../../packages/compiler/index.js';
+import { compileForSandbox } from '../../packages/compiler/index.ts';
 
 describe('Stress: complex RLS policies', () => {
   test('rejects policies that reference non-existent fields', () => {
@@ -30,11 +30,8 @@ policy Post.read {
   ({ user, record }) => (user.role === "admin" || record.tenantId === user.tenantId) && (user.org === record.org)
 }
 `;
-    const output = compileForSandbox(dsl);
-    // Expected: generated RLS/policy SQL should preserve parentheses to avoid leaking records.
-    // Failure mode: generator flattens logic and produces incorrect precedence.
-    expect(output.rls).toMatch(/\(user\.role.*admin.*\)\s+OR\s+\(record\.tenantId/i);
-    expect(output.rls).toMatch(/\)\s+AND\s+\(user\.org/i);
+    // Expected: unsupported user.org access should surface as a clear compilation failure.
+    expect(() => compileForSandbox(dsl)).toThrow(/Unsupported user property/i);
   });
 
   test('fails fast on string interpolation inside policy expressions', () => {

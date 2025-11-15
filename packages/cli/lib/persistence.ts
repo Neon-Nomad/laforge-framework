@@ -124,15 +124,17 @@ export async function generateIncrementalMigration(options: {
   db?: 'postgres' | 'sqlite' | 'mysql';
 }): Promise<GenerateMigrationResult> {
   const baseDir = options.baseDir || process.cwd();
+  const targetDb = options.db || 'sqlite';
   const domainPath = path.resolve(options.domainFile);
   const source = await fs.readFile(domainPath, 'utf8');
   const output = compileForSandbox(source);
+  const latestModels = JSON.parse(JSON.stringify(output.models)) as ModelDefinition[];
 
   const previous = await loadSnapshot(baseDir);
-  const diff = computeSchemaDiff(previous, output.models, options.db || 'postgres');
-  const migrations = generateMigrations(output.models, {
+  const diff = computeSchemaDiff(previous, latestModels, targetDb);
+  const migrations = generateMigrations(latestModels, {
     previousModels: previous,
-    db: options.db || 'postgres',
+    db: targetDb,
     migrations: { allowDestructive: options.allowDestructive ?? false },
   });
 
@@ -142,7 +144,7 @@ export async function generateIncrementalMigration(options: {
   }
 
   // save schema snapshot regardless so status reflects latest compile
-  await saveSnapshot(output.models, baseDir);
+  await saveSnapshot(latestModels, baseDir);
 
   return { migrationName, diffOperations: diff.operations.length };
 }

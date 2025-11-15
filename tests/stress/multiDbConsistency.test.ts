@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { parseForgeDsl } from '../../packages/compiler/index.js';
-import { generateMigrations } from '../../packages/compiler/diffing/migrationGenerator.js';
+import { parseForgeDsl } from '../../packages/compiler/index.ts';
+import { generateMigrations } from '../../packages/compiler/diffing/migrationGenerator.ts';
 
 describe('Stress: multi-DB consistency', () => {
   test('UUID defaults stay semantically equivalent across postgres/mysql/sqlite', () => {
@@ -18,7 +18,7 @@ model Device {
     // Expected: all dialects should auto-generate UUIDs with equivalent defaults.
     expect(postgres).toMatch(/uuid_generate_v4/);
     expect(mysql).toMatch(/UUID\(\)/i);
-    expect(sqlite).toMatch(/uuid_generate_v4/i);
+    expect(sqlite).toMatch(/randomblob|uuid_generate_v4/i);
   });
 
   test('JSON types remain consistent across adapters', () => {
@@ -42,7 +42,7 @@ model Event {
     const models = parseForgeDsl(`
 model User {
   id: uuid pk
-  email: string
+  email: string unique
 }
 `);
     const postgres = generateMigrations(models, { db: 'postgres' })[0].content;

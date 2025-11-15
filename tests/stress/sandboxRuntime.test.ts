@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { LaForgeRuntime } from '../../packages/runtime/index.js';
+import { LaForgeRuntime } from '../../packages/runtime/index.ts';
 import type { DatabaseConnection } from '../../packages/runtime/db/database.js';
 
 const dummyDb: DatabaseConnection = {

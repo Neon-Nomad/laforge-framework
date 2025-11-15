@@ -9,6 +9,7 @@ export type ColumnInfo = {
   optional: boolean;
   default?: string;
   primaryKey?: boolean;
+  unique?: boolean;
 };
 
 export type ForeignKeyInfo = {
@@ -66,6 +67,7 @@ export const mapTypeToSql = (fieldType: FieldType, db: SupportedDb = 'postgres')
         case 'datetime':
           return 'DATETIME';
         case 'jsonb':
+        case 'json':
           return 'JSON';
         default:
           return 'VARCHAR(255)';
@@ -73,10 +75,13 @@ export const mapTypeToSql = (fieldType: FieldType, db: SupportedDb = 'postgres')
     case 'sqlite':
       switch (fieldType) {
         case 'uuid':
+          return 'TEXT';
         case 'string':
         case 'text':
-        case 'jsonb':
           return 'TEXT';
+        case 'jsonb':
+        case 'json':
+          return 'JSON';
         case 'integer':
           return 'INTEGER';
         case 'boolean':
@@ -101,6 +106,7 @@ export const mapTypeToSql = (fieldType: FieldType, db: SupportedDb = 'postgres')
         case 'datetime':
           return 'TIMESTAMP WITH TIME ZONE';
         case 'jsonb':
+        case 'json':
           return 'JSONB';
         default:
           return 'VARCHAR(255)';
@@ -119,14 +125,26 @@ function normalizeColumns(model: ModelDefinition, db: SupportedDb): ColumnInfo[]
         ? (value as FieldOptions)
         : ({ type: value as FieldType } as FieldOptions);
     const name = toSnakeCase(fieldName);
+    let defaultValue = opts.default;
+    if (!defaultValue && opts.primaryKey && opts.type === 'uuid') {
+      if (db === 'mysql') {
+        defaultValue = 'UUID()';
+      } else if (db === 'sqlite') {
+        defaultValue = "(lower(hex(randomblob(16))))";
+      } else {
+        defaultValue = 'uuid_generate_v4()';
+      }
+    }
+
     columns.push({
       name,
       fieldName,
       type: opts.type,
       sqlType: mapTypeToSql(opts.type, db),
       optional: opts.optional === true,
-      default: opts.default,
+      default: defaultValue,
       primaryKey: opts.primaryKey,
+      unique: opts.unique,
     });
   }
   return columns;
@@ -168,6 +186,7 @@ function extractForeignKeys(models: ModelDefinition[]): ForeignKeyInfo[] {
         column: toSnakeCase(rel.foreignKey),
         targetTable,
         targetColumn,
+        onDelete: rel.onDelete || 'cascade',
       });
     }
   }
@@ -206,6 +225,11 @@ export function computeSchemaDiff(oldModels: ModelDefinition[], newModels: Model
   const unmatchedNewTables = new Set(newTables.keys());
   const tableRenames: Array<{ from: string; to: string }> = [];
   for (const oldName of oldTables.keys()) {
+    if (newTables.has(oldName)) {
+      unmatchedOldTables.delete(oldName);
+      unmatchedNewTables.delete(oldName);
+      continue;
+    }
     let best: { name: string; score: number } | null = null;
     for (const newName of newTables.keys()) {
       if (!unmatchedNewTables.has(newName)) continue;
@@ -214,7 +238,7 @@ export function computeSchemaDiff(oldModels: ModelDefinition[], newModels: Model
         best = { name: newName, score };
       }
     }
-    if (best && best.score >= 0.6 && best.name !== oldName) {
+    if (best && best.score >= 0.3 && best.name !== oldName) {
       tableRenames.push({ from: oldName, to: best.name });
       unmatchedOldTables.delete(oldName);
       unmatchedNewTables.delete(best.name);
@@ -235,6 +259,11 @@ export function computeSchemaDiff(oldModels: ModelDefinition[], newModels: Model
     const isRenamedSource = tableRenames.some(r => r.from === table);
     const tableRename = tableRenames.find(r => r.to === table);
     const sourceName = tableRename ? tableRename.from : table;
+
+    if (isRenamedSource) {
+      // Renamed away; handled by the target table iteration.
+      continue;
+    }
 
     const oldCols = oldTables.get(sourceName);
     const newCols = newTables.get(table);
@@ -329,6 +358,8 @@ export function computeSchemaDiff(oldModels: ModelDefinition[], newModels: Model
   const oldFkMap = new Map(oldFks.map(fk => [fkKey(fk), fk]));
   const newFkMap = new Map(newFks.map(fk => [fkKey(fk), fk]));
 
+  const touchedTables = new Set<string>();
+
   for (const [key, fk] of newFkMap) {
     if (!oldFkMap.has(key)) {
       // detect potential changed fk by same table/column
@@ -345,6 +376,30 @@ export function computeSchemaDiff(oldModels: ModelDefinition[], newModels: Model
       operations.push({ kind: 'dropForeignKey', fk, warning: true });
       warnings.push(`Foreign key dropped: ${fk.table}.${fk.column} -> ${fk.targetTable}.${fk.targetColumn}`);
     }
+  }
+
+  // Re-emit foreign keys for tables that changed to ensure dependents stay aligned.
+  for (const op of operations) {
+    if ('table' in op) {
+      touchedTables.add((op as any).table);
+    }
+    if (op.kind === 'renameTable') {
+      touchedTables.add(op.from);
+      touchedTables.add(op.to);
+    }
+  }
+
+  for (const fk of oldFks) {
+    if (!touchedTables.has(fk.targetTable)) continue;
+    const key = fkKey(fk);
+    // Skip if already scheduled for add/alter/drop
+    const alreadyHandled = operations.some(
+      op =>
+        (op.kind === 'addForeignKey' || op.kind === 'dropForeignKey' || op.kind === 'alterForeignKey') &&
+        fkKey((op as any).fk || (op as any).from || (op as any).to) === key,
+    );
+    if (alreadyHandled) continue;
+    operations.push({ kind: 'alterForeignKey', from: fk, to: fk });
   }
 
   return { operations, warnings };

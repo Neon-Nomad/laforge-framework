@@ -12,7 +12,7 @@ const program = new Command();
 program
   .name('laforge')
   .description('LaForge CLI - policy-first backend compiler')
-  .version('1.0.0');
+  .version('1.3.0');
 
 registerCompileCommand(program);
 registerGenerateCommand(program);

@@ -28,8 +28,11 @@ export function registerGenerateCommand(program: Command) {
 
         console.log(`Generated artifacts for ${output.models.length} models:`);
         files.forEach(f => console.log(`- ${f}`));
-        if (migrationResult.migrationName) {
-          console.log(`\nMigration created: .laforge/migrations/${migrationResult.migrationName}`);
+        if (migrationResult.migrationNames.length) {
+          console.log('\nMigrations created:');
+          migrationResult.migrationNames.forEach(name =>
+            console.log(`- .laforge/migrations/${name}`)
+          );
         } else {
           console.log('\nNo schema changes detected; no migration created.');
         }

@@ -112,7 +112,7 @@ export async function writeMigration(content: string, baseDir = process.cwd(), s
 }
 
 export interface GenerateMigrationResult {
-  migrationName: string | null;
+  migrationNames: string[];
   diffOperations: number;
 }
 
@@ -124,7 +124,7 @@ export async function generateIncrementalMigration(options: {
   db?: 'postgres' | 'sqlite' | 'mysql';
 }): Promise<GenerateMigrationResult> {
   const baseDir = options.baseDir || process.cwd();
-  const targetDb = options.db || 'sqlite';
+  const targetDb = options.db || 'postgres';
   const domainPath = path.resolve(options.domainFile);
   const source = await fs.readFile(domainPath, 'utf8');
   const output = compileForSandbox(source);
@@ -138,15 +138,18 @@ export async function generateIncrementalMigration(options: {
     migrations: { allowDestructive: options.allowDestructive ?? false },
   });
 
-  let migrationName: string | null = null;
+  const migrationNames: string[] = [];
   if (migrations.length > 0 && diff.operations.length > 0) {
-    migrationName = await writeMigration(migrations[0].content, baseDir);
+    for (const migration of migrations) {
+      const name = await writeMigration(migration.content, baseDir);
+      migrationNames.push(name);
+    }
   }
 
   // save schema snapshot regardless so status reflects latest compile
   await saveSnapshot(latestModels, baseDir);
 
-  return { migrationName, diffOperations: diff.operations.length };
+  return { migrationNames, diffOperations: diff.operations.length };
 }
 
 export interface ApplyOptions {

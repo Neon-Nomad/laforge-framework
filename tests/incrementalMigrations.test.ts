@@ -40,21 +40,21 @@ test('snapshot created on initial generate and migrations accumulate', async () 
   const domainFile = await writeDomain(tmp, domainV1);
 
   // initial migration (baseline)
-  const first = await generateIncrementalMigration({ domainFile, baseDir: tmp });
-  expect(first.migrationName).not.toBeNull();
+  const first = await generateIncrementalMigration({ domainFile, baseDir: tmp, db: 'sqlite' });
+  expect(first.migrationNames.length).toBeGreaterThan(0);
 
   const snapshot = await loadSnapshot(tmp);
   expect(snapshot.length).toBeGreaterThan(0);
 
   // second migration with added column
   await writeDomain(tmp, domainV2);
-  const second = await generateIncrementalMigration({ domainFile, baseDir: tmp });
-  expect(second.migrationName).not.toBeNull();
+  const second = await generateIncrementalMigration({ domainFile, baseDir: tmp, db: 'sqlite' });
+  expect(second.migrationNames.length).toBeGreaterThan(0);
 
   // third migration with rename (displayName -> fullName)
   await writeDomain(tmp, domainV3);
-  const third = await generateIncrementalMigration({ domainFile, baseDir: tmp });
-  expect(third.migrationName).not.toBeNull();
+  const third = await generateIncrementalMigration({ domainFile, baseDir: tmp, db: 'sqlite' });
+  expect(third.migrationNames.length).toBeGreaterThan(0);
 
   const migDir = path.join(tmp, '.laforge', 'migrations');
   const files = (await fs.readdir(migDir)).filter(f => f.endsWith('.sql'));

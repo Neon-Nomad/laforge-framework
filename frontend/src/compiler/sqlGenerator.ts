@@ -64,11 +64,30 @@ export function generateSqlTemplates(
     }
 
     // UPDATE
-    const updateCols = columns.filter(c => c !== primaryKeyColumn);
-    const updateSetters = `\${Object.keys(updates).map((key, i) => \`\${toSnakeCase(key)} = $\${i + 2}\`).join(', ')}`;
-    let updateQuery = `export const update${modelNamePascal} = (updates: Record<string, any>) => \`UPDATE ${tableRef} SET ${updateSetters} WHERE ${primaryKeyColumn} = $1 RETURNING ${columnString};\`;`;
-     if (config.multiTenant && tenantColumn) {
-        updateQuery = `export const update${modelNamePascal} = (updates: Record<string, any>) => \`UPDATE ${tableRef} SET ${updateSetters} WHERE ${primaryKeyColumn} = $1 AND ${tenantColumn} = $\${Object.keys(updates).length + 2} RETURNING ${columnString};\`;`;
+    const updatableColumns = columns.filter(c => c !== primaryKeyColumn && (!tenantColumn || c !== tenantColumn));
+    const updateAllowed = JSON.stringify(updatableColumns);
+    let updateQuery = `export const update${modelNamePascal} = (updates: Record<string, any>) => {
+  const filtered = Object.keys(updates)
+    .map(key => ({ key, col: toSnakeCase(key) }))
+    .filter(({ col }) => ${updateAllowed}.includes(col));
+  if (filtered.length === 0) {
+    throw new Error('No valid fields supplied for update on ${model.name}.');
+  }
+  const setters = filtered.map(({ col }, i) => \`\${col} = $\${i + 2}\`).join(', ');
+  return \`UPDATE ${tableRef} SET \${setters} WHERE ${primaryKeyColumn} = $1 RETURNING ${columnString};\`;
+};`;
+    if (config.multiTenant && tenantColumn) {
+      updateQuery = `export const update${modelNamePascal} = (updates: Record<string, any>) => {
+  const filtered = Object.keys(updates)
+    .map(key => ({ key, col: toSnakeCase(key) }))
+    .filter(({ col }) => ${updateAllowed}.includes(col));
+  if (filtered.length === 0) {
+    throw new Error('No valid fields supplied for update on ${model.name}.');
+  }
+  const setters = filtered.map(({ col }, i) => \`\${col} = $\${i + 2}\`).join(', ');
+  const tenantParamIndex = filtered.length + 2;
+  return \`UPDATE ${tableRef} SET \${setters} WHERE ${primaryKeyColumn} = $1 AND ${tenantColumn} = $\${tenantParamIndex} RETURNING ${columnString};\`;
+};`;
     }
 
     // DELETE

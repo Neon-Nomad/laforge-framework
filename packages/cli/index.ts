@@ -10,7 +10,7 @@ import { registerStatusCommand } from './commands/status.js';
 const program = new Command();
 
 program
-  .name('forge')
+  .name('laforge')
   .description('LaForge CLI - policy-first backend compiler')
   .version('1.0.0');
 

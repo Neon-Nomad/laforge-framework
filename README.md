@@ -1,5 +1,11 @@
 # LaForge
 
+[![Build](https://img.shields.io/github/actions/workflow/status/Neon-Nomad/laforge-framework/ci.yml?label=build)](https://github.com/Neon-Nomad/laforge-framework/actions)
+[![Tests](https://img.shields.io/github/actions/workflow/status/Neon-Nomad/laforge-framework/tests.yml?label=tests)](https://github.com/Neon-Nomad/laforge-framework/actions)
+[![License](https://img.shields.io/github/license/Neon-Nomad/laforge-framework)](https://github.com/Neon-Nomad/laforge-framework/blob/main/LICENSE)
+[![Version](https://img.shields.io/npm/v/laforge)](https://www.npmjs.com/package/laforge)
+[![Coverage](https://img.shields.io/codecov/c/github/Neon-Nomad/laforge-framework)](https://app.codecov.io/gh/Neon-Nomad/laforge-framework)
+
 LaForge: A Policy-First Backend Compiler for Serious Engineering Teams
 
 LaForge replaces traditional ORMs and schema-drift-prone backends by giving engineers a single source of truth: a domain DSL. From that DSL, LaForge deterministically generates:

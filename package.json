@@ -1,10 +1,10 @@
 {
-  "name": "@laforge-dev/core",
+  "name": "@laforge-dev/cli",
   "version": "1.0.0",
   "description": "LaForge is a policy-first backend compiler that generates schemas, RLS policies, services, routes, and migrations from a single domain definition.",
   "type": "module",
   "bin": {
-    "forge": "./dist/packages/cli/index.js"
+    "laforge": "./dist/packages/cli/index.js"
   },
   "scripts": {
     "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true});\" && tsc -p tsconfig.json",

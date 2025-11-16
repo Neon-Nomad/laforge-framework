@@ -1,12 +1,33 @@
-# LaForge
+<h1 align="center">⚡ LaForge ⚡</h1>
+<h3 align="center">The Policy-First Backend Compiler</h3>
+<h4 align="center">Stop building backends. Start compiling them.</h4>
 
-[![Build](https://img.shields.io/github/actions/workflow/status/Neon-Nomad/laforge-framework/ci.yml?label=build)](https://github.com/Neon-Nomad/laforge-framework/actions)
-[![Tests](https://img.shields.io/github/actions/workflow/status/Neon-Nomad/laforge-framework/tests.yml?label=tests)](https://github.com/Neon-Nomad/laforge-framework/actions)
-[![License](https://img.shields.io/github/license/Neon-Nomad/laforge-framework)](https://github.com/Neon-Nomad/laforge-framework/blob/main/LICENSE)
-[![Version](https://img.shields.io/npm/v/laforge)](https://www.npmjs.com/package/laforge)
-[![Coverage](https://img.shields.io/codecov/c/github/Neon-Nomad/laforge-framework)](https://app.codecov.io/gh/Neon-Nomad/laforge-framework)
+<p align="center">
+  <img src="https://img.shields.io/badge/Status-Active-brightgreen" />
+  <img src="https://img.shields.io/badge/Zero%20Drift-Guaranteed-red" />
+  <img src="https://img.shields.io/badge/DB-Postgres%20%7C%20MySQL%20%7C%20SQLite-orange" />
+  <img src="https://img.shields.io/badge/Security-Policy%20First-critical" />
+  <img src="https://img.shields.io/github/stars/Neon-Nomad/laforge-framework?style=social" />
+  <img src="https://img.shields.io/badge/Language-TypeScript-yellow" />
+  <img src="https://img.shields.io/badge/License-MIT-green" />
+  <img src="https://img.shields.io/github/last-commit/Neon-Nomad/laforge-framework" />
+</p>
 
-LaForge: A Policy-First Backend Compiler for Serious Engineering Teams
+<p align="center">
+  <img src="https://img.shields.io/badge/Category-Backend%20Compiler-blueviolet" />
+  <img src="https://img.shields.io/badge/Generation-Full%20Backend-orange" />
+  <img src="https://img.shields.io/badge/CI-Safe%20Migrations-blue" />
+</p>
+
+---
+
+<p align="center">
+  🔥 Compile your entire backend — schema, migrations, policies, validators, routes, and services — from a single domain file.
+</p>
+
+<p align="center">
+  <b>LaForge: A Policy-First Backend Compiler for Serious Engineering Teams</b>
+</p>
 
 LaForge replaces traditional ORMs and schema-drift-prone backends by giving engineers a single source of truth: a domain DSL. From that DSL, LaForge deterministically generates:
 - SQL schema

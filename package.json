@@ -3,6 +3,14 @@
   "version": "1.0.2",
   "description": "LaForge is a policy-first backend compiler that generates schemas, RLS policies, services, routes, and migrations from a single domain definition.",
   "type": "module",
+  "main": "dist/packages/cli/index.js",
+  "types": "dist/packages/cli/index.d.ts",
+  "files": [
+    "dist/packages/cli/**",
+    "package.json",
+    "README.md",
+    "LICENSE"
+  ],
   "bin": {
     "laforge": "./dist/packages/cli/index.js"
   },

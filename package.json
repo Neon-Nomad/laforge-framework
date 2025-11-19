@@ -16,7 +16,9 @@
   },
   "scripts": {
     "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true});\" && tsc -p tsconfig.json",
-    "test": "vitest run",
+    "test": "npm run test:backend && npm run test:frontend",
+    "test:backend": "vitest run --config vitest.config.ts",
+    "test:frontend": "npm --prefix generated_frontend/frontend test",
     "dev": "tsx watch packages/cli/index.ts",
     "forge": "node ./dist/packages/cli/index.js"
   },

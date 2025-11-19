@@ -69,8 +69,8 @@ npm run build
 forge compile examples/simple-blog/domain.ts
 
 # Generate artifacts
-forge generate examples/simple-blog/domain.ts
-ls examples/simple-blog/generated
+ forge generate examples/simple-blog/domain.ts
+ ls examples/simple-blog/generated
 
 # Run tests
 npm test

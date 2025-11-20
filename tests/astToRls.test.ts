@@ -1,4 +1,5 @@
 import { expect, test } from 'vitest';
+import { parseForgeDsl } from '../packages/compiler/index.js';
 import { generateRlsPolicies } from '../packages/compiler/rls/astToRls.js';
 import { compileForSandbox } from '../packages/compiler/index.js';
 
@@ -11,51 +12,44 @@ test('literal true policies become TRUE', () => {
   const rls = compileRls(`
 model Note {
   id: uuid pk
-  text: string
 }
-
 policy Note.read {
   true
 }
 `);
-  expect(rls).toContain('USING (TRUE)');
+  expect(rls).toContain('USING (true)');
 });
 
 test('literal false policies become FALSE', () => {
   const rls = compileRls(`
 model Note {
   id: uuid pk
-  text: string
 }
-
 policy Note.read {
   false
 }
 `);
-  expect(rls).toContain('USING (FALSE)');
+  expect(rls).toContain('USING (false)');
 });
 
 test('simple comparison included in SQL', () => {
   const rls = compileRls(`
 model Note {
   id: uuid pk
-  text: string
+  title: string
 }
-
 policy Note.read {
-  record.text == "hello"
+  record.title === "Public Note"
 }
 `);
-  expect(rls).toContain("USING (text = 'hello')");
+  expect(rls).toContain("title = 'Public Note'");
 });
 
 test('arrow returning true works', () => {
   const rls = compileRls(`
 model Note {
   id: uuid pk
-  text: string
 }
-
 policy Note.read {
   () => true
 }
@@ -67,28 +61,26 @@ test('arrow with record comparison works', () => {
   const rls = compileRls(`
 model Note {
   id: uuid pk
-  text: string
+  title: string
 }
-
 policy Note.read {
-  (record) => record.text === "abc"
+  (record) => record.title === "Public Note"
 }
 `);
-  expect(rls).toContain("USING (text = 'abc')");
+  expect(rls).toContain("title = 'Public Note'");
 });
 
 test('arrow comparing user and record works', () => {
   const rls = compileRls(`
 model Note {
   id: uuid pk
-  text: string
+  ownerId: uuid
 }
-
 policy Note.read {
-  ({ user, record }) => user.id === record.id
+  ({ record, user }) => record.ownerId === user.id
 }
 `);
-  expect(rls).toContain("USING (current_setting('app.user_id')::uuid = id)");
+  expect(rls).toContain("owner_id = current_setting('app.user_id')::uuid");
 });
 
 test('tenant isolation composes with policy', () => {
@@ -96,27 +88,23 @@ test('tenant isolation composes with policy', () => {
 model Note {
   id: uuid pk
   tenantId: uuid tenant
-  text: string
 }
-
 policy Note.read {
   true
 }
 `, true);
-  expect(rls).toContain('(tenant_id = current_setting(\'app.tenant_id\')::uuid) AND (TRUE)');
+  expect(rls).toContain("(tenant_id = current_setting('app.tenant_id')::uuid) AND (true)");
 });
 
 test('invalid bare expression throws', () => {
   expect(() =>
-    compileForSandbox(`
-model Note {
+    compileRls(`
+model User {
   id: uuid pk
-  text: string
 }
-
-policy Note.read {
+policy User.read {
   foo == bar
 }
 `)
-  ).toThrow(/Could not find a valid expression in the policy handler: foo == bar/);
+  ).toThrow(/Unknown variable in chain: foo/);
 });

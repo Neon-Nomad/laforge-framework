@@ -1,4 +1,4 @@
-<h1 align="center">⚡ LaForge ⚡</h1>
+<h1 align="center">Ã¢Å¡Â¡ LaForge Ã¢Å¡Â¡</h1>
 <h3 align="center">The Policy-First Backend Compiler</h3>
 <h4 align="center">Stop building backends. Start compiling them.</h4>
 
@@ -22,7 +22,7 @@
 ---
 
 <p align="center">
-  🔥 Compile your entire backend — schema, migrations, policies, validators, routes, and services — from a single domain file.
+  Ã°Å¸â€Â¥ Compile your entire backend Ã¢â‚¬â€ schema, migrations, policies, validators, routes, and services Ã¢â‚¬â€ from a single domain file.
 </p>
 
 <p align="center">
@@ -46,7 +46,7 @@ Core Guarantees (post-hardening)
 - Sandboxed runtime: `new Function()` blocked; `require('fs')` blocked; missing domain services or Zod exports fail fast.
 - Hardened tests: stress coverage for cycles, multi-hop FKs, cross-DB consistency, destructive-migration protection, sandbox isolation.
 
-LaForge is not an ORM. It’s a compiler for your backend.
+LaForge is not an ORM. ItÃ¢â‚¬â„¢s a compiler for your backend.
 
 ## Project Layout
 
@@ -68,16 +68,40 @@ npm run build
 # Compile a domain (no files written)
 forge compile examples/simple-blog/domain.ts
 
-# Generate artifacts
- forge generate examples/simple-blog/domain.ts
- ls examples/simple-blog/generated
+# Generate full-stack artifacts (backend + React frontend)
+forge generate examples/simple-blog/domain.ts
+# (add --skip-frontend if you only want backend output)
+# (add --skip-auto-migrate if Docker/sandboxing isn't available)
 
 # Run tests
 npm test
 
 # CLI help
 forge --help
+
+# Full smoke test (install Ã¢â€ â€™ build Ã¢â€ â€™ generate Ã¢â€ â€™ build frontend)
+npm run smoke
+
+# Run the generated frontend (after forge generate finishes)
+cd examples/simple-blog/generated_frontend/frontend
+npm install
+npm run dev
+
+# (optional) point the UI at a remote API instead of http://localhost:3000
+# echo VITE_API_BASE_URL=http://my-api.example.com > .env.local
+# npm run dev
+
+
+
+
+# Launch the paste-and-generate UI
+forge studio --port 4173
+open http://localhost:4173
 ```
+
+## Language Specification
+
+- Full DSL reference: [docs/DSL_SPEC.md](docs/DSL_SPEC.md)
 
 ## DSL Example
 
@@ -144,14 +168,14 @@ hook Post.beforeCreate {
 
 ## CLI Commands
 
-- `forge compile <domain-file>` – validate and compile a domain definition.
-- `forge generate <domain-file>` – emit SQL, services, routes, and migrations under `<domain>/generated` (or `--out`).
-- `forge diff <old-domain> <new-domain>` – show schema-aware diffs between two domain definitions (`--json` available).
-- `forge migrate` – apply pending migrations under `.laforge/migrations` (supports `--dry-run`, `--check`, `--to`).
-- `forge status` – show applied vs. pending migrations.
-- `forge test` – run the Vitest suite.
+- `forge compile <domain-file>` Ã¢â‚¬â€œ validate and compile a domain definition.
+- `forge generate <domain-file>` Ã¢â‚¬â€œ emit SQL, services, routes, and migrations under `<domain>/generated` (or `--out`).
+- `forge diff <old-domain> <new-domain>` Ã¢â‚¬â€œ show schema-aware diffs between two domain definitions (`--json` available).
+- `forge migrate` Ã¢â‚¬â€œ apply pending migrations under `.laforge/migrations` (supports `--dry-run`, `--check`, `--to`).
+- `forge status` Ã¢â‚¬â€œ show applied vs. pending migrations.
+- `forge test` Ã¢â‚¬â€œ run the Vitest suite.
 
-All commands run locally in Node.js—no browser or DOM runtime required.
+All commands run locally in Node.jsÃ¢â‚¬â€no browser or DOM runtime required.
 
 ## Schema-aware diff engine
 
@@ -213,9 +237,10 @@ LaForge persists schema state and migrations in `.laforge/`:
   migrations/
     20250201_150203_add_field.sql
     state.json         # applied migration log
+  repaired/            # auto-migrate fallbacks (only when sandbox can't rewrite)
 ```
 
-`forge generate` compares the current domain to `schema.json`, writes the next migration into `.laforge/migrations/`, and updates the snapshot. `forge migrate` applies pending migrations to the target database (SQLite by default, configurable with `--db`). `forge status` reports applied vs. pending.
+`forge generate` compares the current domain to `schema.json`, writes the next migration into `.laforge/migrations/`, and (by default) runs the Docker-backed auto-migrate sandbox to validate/repair the SQL. Use `--skip-auto-migrate` if you need to bypass the sandbox (e.g., Docker unavailable); repaired fallbacks land in `.laforge/repaired/`. `forge migrate` applies pending migrations to the target database (SQLite by default, configurable with `--db`). `forge status` reports applied vs. pending.
 
 CI examples:
 - `forge migrate --check` fails if pending migrations exist.
@@ -242,13 +267,13 @@ Full docs live at `docs/HANDBOOK.md`:
 
 ## Roadmap to v1.0
 
-- ✅ Backend-only compiler and runtime
-- ✅ CLI for compile/generate/diff/test
-- ✅ Simple example domain
-- 🚧 Harden parser, validation, and schema diff/migration pipeline
-- 🚧 Add more real-world examples and migration strategies
-- 🚧 Publish ecosystem tooling (language server, VS Code snippets)
+- Ã¢Å“â€¦ Backend-only compiler and runtime
+- Ã¢Å“â€¦ CLI for compile/generate/diff/test
+- Ã¢Å“â€¦ Simple example domain
+- Ã°Å¸Å¡Â§ Harden parser, validation, and schema diff/migration pipeline
+- Ã°Å¸Å¡Â§ Add more real-world examples and migration strategies
+- Ã°Å¸Å¡Â§ Publish ecosystem tooling (language server, VS Code snippets)
 
 ## Contributing
 
-Issues and PRs are welcome. Please keep the repository backend-only—no DOM, React, or playground dependencies.
+Issues and PRs are welcome. Please keep the repository backend-onlyÃ¢â‚¬â€no DOM, React, or playground dependencies.

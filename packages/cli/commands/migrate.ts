@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 import pc from 'picocolors';
-import { applyMigrations } from '../lib/persistence.js';
+import { applyMigrations, loadSnapshot } from '../lib/persistence.js';
+import { recordHistoryEntry } from '../lib/history.js';
 
 export function registerMigrateCommand(program: Command) {
   program
@@ -40,6 +41,22 @@ export function registerMigrateCommand(program: Command) {
         } else {
           console.log(pc.green('Applied migrations:'));
           result.applied.forEach(m => console.log(`- ${m}`));
+        }
+
+        // Record the state after applying migrations so the timeline can reconstruct DB state.
+        if (!options.dryRun && result.applied.length > 0) {
+          try {
+            const models = await loadSnapshot();
+            await recordHistoryEntry({
+              kind: 'migrate',
+              models,
+              migrationsApplied: result.applied,
+              notes: options.to ? `Applied up to ${options.to}` : undefined,
+              metadata: { dbPath: options.db },
+            });
+          } catch (historyError: any) {
+            console.warn(pc.yellow(`Warning: failed to record timeline entry: ${historyError?.message || historyError}`));
+          }
         }
       } catch (error: any) {
         console.error(pc.red(`Migration failed: ${error.message}`));

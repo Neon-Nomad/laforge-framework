@@ -6,6 +6,8 @@ import { registerTestCommand } from './commands/test.js';
 import { registerDiffCommand } from './commands/diff.js';
 import { registerMigrateCommand } from './commands/migrate.js';
 import { registerStatusCommand } from './commands/status.js';
+import { registerStudioCommand } from './commands/studio.js';
+import { registerTimelineCommand } from './commands/timeline.js';
 
 const program = new Command();
 
@@ -20,5 +22,7 @@ registerTestCommand(program);
 registerDiffCommand(program);
 registerMigrateCommand(program);
 registerStatusCommand(program);
+registerStudioCommand(program);
+registerTimelineCommand(program);
 
 program.parseAsync(process.argv);

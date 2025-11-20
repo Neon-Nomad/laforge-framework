@@ -19,13 +19,17 @@
     "test": "npm run test:backend && npm run test:frontend",
     "test:backend": "vitest run --config vitest.config.ts",
     "test:frontend": "npm --prefix generated_frontend/frontend test",
+    "build:auto-migrate": "tsc -p packages/auto-migrate/tsconfig.json",
+    "test:auto-migrate": "vitest run --config packages/auto-migrate/vitest.config.ts",
     "dev": "tsx watch packages/cli/index.ts",
-    "forge": "node ./dist/packages/cli/index.js"
+    "forge": "node ./dist/packages/cli/index.js",
+    "smoke": "node scripts/smoke-fullstack.mjs"
   },
   "workspaces": [
     "packages/*"
   ],
   "dependencies": {
+    "@laforge-dev/auto-migrate": "workspace:*",
     "@babel/parser": "^7.23.6",
     "@babel/traverse": "^7.23.6",
     "@babel/types": "^7.23.6",
@@ -45,6 +49,7 @@
     "zod": "^3.22.4"
   },
   "devDependencies": {
+    "@types/archiver": "^6.0.3",
     "@types/babel__traverse": "^7.18.4",
     "@types/better-sqlite3": "^7.6.8",
     "@types/diff": "^5.0.8",

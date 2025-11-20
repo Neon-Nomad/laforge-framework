@@ -20,6 +20,49 @@ function isDestructive(op: SchemaOperation): boolean {
   );
 }
 
+function fallbackStatementsFor(
+  op: SchemaOperation,
+  withSchema: (name: string) => string,
+  db: SupportedDb,
+): string[] {
+  const tableRef = 'table' in op ? withSchema(op.table) : '';
+  switch (op.kind) {
+    case 'dropTable': {
+      return [
+        `-- Fallback for dropping table ${op.table}: rename instead to keep data`,
+        `ALTER TABLE ${tableRef} RENAME TO ${op.table}_deprecated;`,
+      ];
+    }
+    case 'dropColumn': {
+      const colName = op.column.name;
+      return [
+        `-- Fallback for dropping column ${op.table}.${colName}: rename instead of destructive drop`,
+        `ALTER TABLE ${tableRef} RENAME COLUMN ${colName} TO ${colName}_deprecated;`,
+      ];
+    }
+    case 'alterColumnType': {
+      const copyColumn = `${op.column}_shadow`;
+      return [
+        `-- Fallback for altering ${op.table}.${op.column} type. Copy data to a shadow column for manual migration.`,
+        `ALTER TABLE ${tableRef} ADD COLUMN ${copyColumn} ${op.to};`,
+        `UPDATE ${tableRef} SET ${copyColumn} = ${op.column};`,
+        `-- Once data is verified, consider swapping ${op.column} with ${copyColumn} and dropping the original column manually.`,
+      ];
+    }
+    case 'dropForeignKey': {
+      const fk = op.fk;
+      return [
+        `-- Fallback for dropping foreign key ${fk.table}.${fk.column}.`,
+        `-- Consider disabling the constraint manually only after auditing dependent data.`,
+      ];
+    }
+    default:
+      return [
+        `-- Fallback placeholder for ${op.kind}. Manual intervention required.`,
+      ];
+  }
+}
+
 export function generateMigrations(
   models: ModelDefinition[],
   config: MigrationConfig = {}
@@ -35,6 +78,7 @@ export function generateMigrations(
   const diff = computeSchemaDiff(previousModels, models, db);
   const statements: string[] = [];
   const skipped: string[] = [...diff.warnings];
+  const fallbackStatements: string[] = [];
 
   const describeOp = (op: SchemaOperation): string => {
     switch (op.kind) {
@@ -63,6 +107,7 @@ export function generateMigrations(
   for (const op of diff.operations) {
     if (isDestructive(op) && !allowDestructive) {
       skipped.push(`Destructive change skipped: ${describeOp(op)}`);
+      fallbackStatements.push(...fallbackStatementsFor(op, withSchema, db));
       continue;
     }
     const stmt = adapter.render(op, withSchema);
@@ -80,8 +125,24 @@ export function generateMigrations(
 ${warningsBlock}${statements.join('\n')}
 `;
 
-  return [{
-    filePath: `migrations/${timestamp}_schema.sql`,
-    content,
-  }];
+  const results: GenerationResult[] = [
+    {
+      filePath: `migrations/${timestamp}_schema.sql`,
+      content,
+    },
+  ];
+
+  if (fallbackStatements.length > 0) {
+    const fallbackContent = `-- WARNING: Destructive changes were skipped in safe mode. Review and apply manually.
+-- Non-destructive fallbacks generated at ${new Date().toUTCString()}
+-- These statements keep data while you plan the destructive change.
+${fallbackStatements.join('\n')}
+`;
+    results.push({
+      filePath: `migrations/${timestamp}_fallback.sql`,
+      content: fallbackContent,
+    });
+  }
+
+  return results;
 }

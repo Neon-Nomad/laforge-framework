@@ -4,6 +4,7 @@ import { generateDomainServices } from './codegen/domainGenerator.js';
 import { generateRlsPolicies } from './rls/astToRls.js';
 import { generateFastifyAdapter } from './codegen/fastifyAdapter.js';
 import { generateMigrations } from './diffing/migrationGenerator.js';
+import { generateReactApplication } from './codegen/reactGenerator.js';
 import type {
     ForgeConfig,
     ModelDefinition,
@@ -113,21 +114,24 @@ function parseModelFields(modelName: string, body: string): { schema: ModelSchem
             const normalizedType = type === 'int' ? 'integer' : type;
             const options: FieldOptions = { type: normalizedType as FieldType };
             const restOfLine = line.substring(fieldMatch[0].length).trim();
-            
+
             if (restOfLine.includes('pk')) options.primaryKey = true;
             if (restOfLine.includes('tenant')) options.tenant = true;
             if (restOfLine.includes('optional')) options.optional = true;
             if (restOfLine.includes('unique')) options.unique = true;
-            
+
             const defaultMatch = restOfLine.match(/default\s+("([^"]*)"|'([^']*)'|([\w\(\)]+))/);
             if (defaultMatch) {
                 options.default = defaultMatch[2] || defaultMatch[3] || defaultMatch[4];
             }
-            
+
+            // Explicitly carry nullability so downstream consumers don't have to infer undefined as false.
+            if (options.optional !== true) options.optional = false;
+
             schema[name] = options;
         }
     }
-    
+
     // Auto-assign primary key to 'id' if no other pk is found
     if (schema.id && typeof schema.id === 'object' && !(schema.id as any).primaryKey) {
         const pkCount = Object.values(schema).filter(v => typeof v === 'object' && (v as FieldOptions).primaryKey).length;
@@ -146,12 +150,12 @@ function parseModelRelations(modelDef: ModelDefinition, body: string, allModels:
         .flat()
         .map(l => l.trim())
         .filter(Boolean);
-    
+
     for (const line of lines) {
         const relationMatch = line.match(/^(\w+):\s*(belongsTo|hasMany|manyToMany)\(["']?(\w+)["']?\)/);
         if (relationMatch) {
             const [, name, type, targetModelName] = relationMatch;
-            
+
             if (!allModels.has(targetModelName)) {
                 throw new Error(`In model "${modelDef.name}", relation "${name}" points to an undefined model "${targetModelName}".`);
             }
@@ -159,7 +163,7 @@ function parseModelRelations(modelDef: ModelDefinition, body: string, allModels:
             if (type === 'belongsTo') {
                 const foreignKey = `${name}Id`;
                 if (!modelDef.schema[foreignKey]) {
-                    modelDef.schema[foreignKey] = { type: 'uuid' };
+                    modelDef.schema[foreignKey] = { type: 'uuid', optional: false };
                 }
                 // Default to cascading deletes for belongsTo to avoid orphaned rows (can be made configurable later).
                 modelDef.relations.push({ name, type: 'belongsTo', targetModelName, foreignKey, onDelete: 'cascade' });
@@ -167,9 +171,9 @@ function parseModelRelations(modelDef: ModelDefinition, body: string, allModels:
                 const remoteForeignKey = `${toCamelCase(modelDef.name)}Id`;
                 modelDef.relations.push({ name, type: 'hasMany', targetModelName, foreignKey: remoteForeignKey, onDelete: 'cascade' });
             } else if (type === 'manyToMany') {
-                 const thisModelFk = `${toCamelCase(modelDef.name)}Id`;
-                 const joinTableName = [modelDef.name, targetModelName].sort().join('_').toLowerCase() + 's';
-                 modelDef.relations.push({ name, type: 'manyToMany', targetModelName, foreignKey: thisModelFk, through: joinTableName, onDelete: 'cascade' });
+                const thisModelFk = `${toCamelCase(modelDef.name)}Id`;
+                const joinTableName = [modelDef.name, targetModelName].sort().join('_').toLowerCase() + 's';
+                modelDef.relations.push({ name, type: 'manyToMany', targetModelName, foreignKey: thisModelFk, through: joinTableName, onDelete: 'cascade' });
             }
         }
     }
@@ -181,9 +185,9 @@ export function parseForgeDsl(code: string): ModelDefinition[] {
 
     const modelRegex = /model\s+(\w+)\s*{([^}]*)}/g;
     let match;
-    
+
     // First pass: create all models so relations can be resolved
-    while((match = modelRegex.exec(uncommentedCode)) !== null) {
+    while ((match = modelRegex.exec(uncommentedCode)) !== null) {
         const [, modelName, body] = match;
         const { schema } = parseModelFields(modelName, body);
         modelDefs.set(modelName, {
@@ -198,18 +202,18 @@ export function parseForgeDsl(code: string): ModelDefinition[] {
 
     // Second pass: parse relations now that all models are known
     modelRegex.lastIndex = 0;
-    while((match = modelRegex.exec(uncommentedCode)) !== null) {
+    while ((match = modelRegex.exec(uncommentedCode)) !== null) {
         const [, modelName, body] = match;
         const modelDef = modelDefs.get(modelName)!;
         parseModelRelations(modelDef, body, modelDefs);
     }
-    
+
     // Third pass: parse policies, hooks, and extensions
     const blockRegex = /(policy|hook|extend)\s+([\w\.]+)\s*{((?:[^{}]|{(?:[^{}]|{[^{}]*})*})*)}/g;
-    while((match = blockRegex.exec(uncommentedCode)) !== null) {
+    while ((match = blockRegex.exec(uncommentedCode)) !== null) {
         const [, type, target, body] = match;
         const bodyContent = body.trim();
-        
+
         const [modelName, subTarget] = target.split('.');
         const modelDef = modelDefs.get(modelName);
 
@@ -225,18 +229,18 @@ export function parseForgeDsl(code: string): ModelDefinition[] {
             modelDef.policies[action] = { action, handler: () => false, handlerSource: bodyContent };
         } else if (type === 'hook') {
             const hookType = subTarget as HookType;
-            modelDef.hooks.push({ type: hookType, handler: () => {}, handlerSource: bodyContent });
+            modelDef.hooks.push({ type: hookType, handler: () => { }, handlerSource: bodyContent });
         } else if (type === 'extend') {
             const fullObjectSource = `({ ${bodyContent} })`;
             try {
                 // We don't execute this, just need the source for the generator
                 const methods = bodyContent.matchAll(/(\w+)\s*\(([^)]*)\)\s*\{/g);
-                for(const methodMatch of methods) {
+                for (const methodMatch of methods) {
                     // This is a simplified parsing for the sandbox
                     const name = methodMatch[1];
-                     modelDef.extensions.push({
+                    modelDef.extensions.push({
                         name,
-                        handler: () => {}, // Placeholder
+                        handler: () => { }, // Placeholder
                         handlerSource: `${name}${bodyContent.substring(bodyContent.indexOf('('))}`,
                     });
                 }
@@ -245,8 +249,19 @@ export function parseForgeDsl(code: string): ModelDefinition[] {
             }
         }
     }
-    
-    return Array.from(modelDefs.values());
+
+    const allModelDefs = Array.from(modelDefs.values());
+
+    for (const model of allModelDefs) {
+        const hasPrimaryKey = Object.values(model.schema).some(
+            (value) => typeof value === 'object' && (value as FieldOptions).primaryKey,
+        );
+        if (!hasPrimaryKey) {
+            throw new Error(`Model "${model.name}" is missing a primary key. Add a field marked with "pk", e.g. "id: uuid pk".`);
+        }
+    }
+
+    return allModelDefs;
 }
 
 /**
@@ -259,7 +274,7 @@ export function compileForSandbox(code: string, config: Partial<ForgeConfig> = {
 
         modelRegistry.clear();
         models.forEach(m => modelRegistry.registerModel(m));
-        
+
         const allModels = modelRegistry.getAllModels();
         if (allModels.length === 0) {
             throw new Error("Compilation failed: No models were defined. Check your syntax for `model YourModel { ... }`.");
@@ -293,18 +308,20 @@ export function compileForSandbox(code: string, config: Partial<ForgeConfig> = {
 
     } catch (error: any) {
         console.error("Compilation Error:", error);
-        
+
         let friendlyMessage = `An unexpected error occurred during compilation.\n\n${error.stack || error.message}`;
 
         if (error instanceof SyntaxError) {
             friendlyMessage = `Syntax Error: Your DSL code has a syntax error that prevents compilation. This often happens inside a policy, hook, or extend block.\n\n${error.message}`;
         } else if (error.message.includes('is not defined')) {
-             friendlyMessage = `Parsing Error: Could not parse DSL. ${error.message}. Check for typos in your model definitions.`;
+            friendlyMessage = `Parsing Error: Could not parse DSL. ${error.message}. Check for typos in your model definitions.`;
         } else {
-             friendlyMessage = `Compilation Error: ${error.message}`;
+            friendlyMessage = `Compilation Error: ${error.message}`;
         }
-        
+
         // Re-throw with a cleaner message for the worker to catch
         throw new Error(friendlyMessage);
     }
 }
+
+export { generateReactApplication };

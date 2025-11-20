@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { repairMigration } from '../src/repair';
-import type { ClassifiedError } from '../src/contract';
+import { repairMigration } from '../src/repair/index.js';
+import type { ClassifiedError } from '../src/contract.js';
 
 describe('repairMigration', () => {
   it('injects stubs and alters statements for known errors', () => {

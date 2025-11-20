@@ -80,7 +80,7 @@ policy Note.read {
   ({ record, user }) => record.ownerId === user.id
 }
 `);
-  expect(rls).toContain("owner_id = current_setting('app.user_id')::uuid");
+  expect(rls).toContain("owner_id = laforge_user_id()");
 });
 
 test('tenant isolation composes with policy', () => {
@@ -93,7 +93,7 @@ policy Note.read {
   true
 }
 `, true);
-  expect(rls).toContain("(tenant_id = current_setting('app.tenant_id')::uuid) AND (true)");
+  expect(rls).toContain("(tenant_id = laforge_tenant_id()) AND (true)");
 });
 
 test('invalid bare expression throws', () => {

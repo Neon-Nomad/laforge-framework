@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 import crypto from 'node:crypto';
 import type { ModelDefinition } from '../../compiler/ast/types.js';
 import { computeSchemaDiff, formatSchemaDiff, type SchemaDiffResult } from '../../compiler/diffing/schemaDiff.js';
@@ -27,11 +28,27 @@ export interface HistoryAttachment extends Omit<HistoryAttachmentInput, 'content
   path: string;
 }
 
+export interface ApprovalRecord {
+  id: string;
+  decision: 'approved' | 'rejected' | 'annotated';
+  actor: string;
+  timestamp: string;
+  reason?: string;
+  hash?: string;
+  signature?: string;
+  publicKey?: string;
+}
+
 export interface HistoryEntry {
   id: string;
   createdAt: string;
   kind: HistoryEntryKind;
   branch: string;
+  hash?: string;
+  prevHash?: string;
+  author?: string;
+  signature?: string;
+  publicKey?: string;
   domainPath?: string;
   domainHash?: string;
   schemaPath: string;
@@ -44,6 +61,7 @@ export interface HistoryEntry {
   notes?: string;
   metadata?: Record<string, unknown>;
   attachments?: HistoryAttachment[];
+  approvals?: ApprovalRecord[];
 }
 
 export interface RecordHistoryInput {
@@ -69,7 +87,7 @@ interface HistoryPaths {
   head: string;
 }
 
-function historyPaths(baseDir: string): HistoryPaths {
+export function historyPaths(baseDir: string): HistoryPaths {
   const laforge = laforgePaths(baseDir);
   return {
     root: laforge.root,
@@ -180,11 +198,22 @@ export async function recordHistoryEntry(input: RecordHistoryInput): Promise<His
     );
   }
 
+  const existing = await listHistoryEntries(baseDir, { branch });
+  const prevHash = existing.find(e => e.branch === branch)?.hash;
+  const author =
+    process.env.LAFORGE_AUTHOR ||
+    process.env.USER ||
+    process.env.USERNAME ||
+    (os.userInfo && os.userInfo().username) ||
+    'unknown';
+
   const entry: HistoryEntry = {
     id,
     createdAt,
     kind: input.kind,
     branch,
+    prevHash,
+    author,
     domainPath: input.domainPath ? path.relative(baseDir, input.domainPath) : undefined,
     domainHash,
     schemaPath: path.relative(baseDir, schemaPath),
@@ -203,6 +232,24 @@ export async function recordHistoryEntry(input: RecordHistoryInput): Promise<His
   if (domainRelativePath) {
     entry.metadata = { ...(entry.metadata || {}), storedDomain: domainRelativePath };
   }
+
+  const hashPayload = {
+    id: entry.id,
+    createdAt: entry.createdAt,
+    kind: entry.kind,
+    branch: entry.branch,
+    prevHash: entry.prevHash,
+    schemaHash: entry.schemaHash,
+    domainHash: entry.domainHash,
+    migrationsCreated: entry.migrationsCreated || [],
+    migrationsApplied: entry.migrationsApplied || [],
+    attachments: attachments.map(a => a.hash),
+    allowDestructive: entry.allowDestructive ?? false,
+    diffOperations: entry.diffOperations ?? 0,
+    autoMigrateSummary: entry.autoMigrateSummary || '',
+    metadata: entry.metadata || {},
+  };
+  entry.hash = hashContent(JSON.stringify(hashPayload));
 
   await fs.writeFile(path.join(entryDir, ENTRY_FILE), JSON.stringify(entry, null, 2), 'utf8');
   return entry;

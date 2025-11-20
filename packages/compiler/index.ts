@@ -1,7 +1,7 @@
 import { modelRegistry } from './ast/registry.js';
 import { generateZodSchemas } from './codegen/zodGenerator.js';
 import { generateDomainServices } from './codegen/domainGenerator.js';
-import { generateRlsPolicies } from './rls/astToRls.js';
+import { generateRlsPolicies, compilePolicyToSql } from './rls/astToRls.js';
 import { generateFastifyAdapter } from './codegen/fastifyAdapter.js';
 import { generateMigrations } from './diffing/migrationGenerator.js';
 import { generateReactApplication } from './codegen/reactGenerator.js';
@@ -15,6 +15,9 @@ import type {
     HookType,
     ExtensionHandler,
     GenerationResult,
+    PermissionRule,
+    ModelRbacSpec,
+    CompiledPermissionRule,
 } from './ast/types.js';
 
 export interface CompilationOutput {
@@ -29,6 +32,7 @@ export interface CompilationOutput {
     config: ForgeConfig;
     zodSchemas?: string;
     sqlQueries?: string;
+    rbac?: ModelRbacSpec[];
 }
 
 export interface CompilationResult {
@@ -179,15 +183,220 @@ function parseModelRelations(modelDef: ModelDefinition, body: string, allModels:
     }
 }
 
+function parseRoles(code: string): string[] {
+    const roles = new Set<string>();
+    const rolesRegex = /roles\s*{([^}]*)}/g;
+    let match;
+    while ((match = rolesRegex.exec(code)) !== null) {
+        const body = match[1];
+        const tokens = body.match(/[A-Za-z0-9_\-\.]+/g) || [];
+        tokens.forEach(token => roles.add(token));
+    }
+    return Array.from(roles);
+}
+
+function parseClaims(code: string, roles: Set<string>): { claims: string[]; roleClaims: Record<string, string[]> } {
+    const claims = new Set<string>();
+    const roleClaims: Record<string, string[]> = {};
+    const claimsRegex = /claims\s*{([^}]*)}/g;
+    let match;
+
+    const addClaim = (claim: string) => {
+        if (claim) claims.add(claim);
+    };
+
+    while ((match = claimsRegex.exec(code)) !== null) {
+        const body = match[1];
+        const lines = body
+            .split('\n')
+            .map(l => l.split(','))
+            .flat()
+            .map(l => l.trim())
+            .filter(Boolean);
+
+        for (const line of lines) {
+            const binding = line.split(':');
+            if (binding.length > 1) {
+                const role = binding[0].trim();
+                if (!roles.has(role)) {
+                    throw new Error(`Claims block references unknown role "${role}". Declare it in the roles block.`);
+                }
+                const claimTokens = binding[1].split('|').map(token => token.trim()).filter(Boolean);
+                claimTokens.forEach(addClaim);
+                if (!roleClaims[role]) roleClaims[role] = [];
+                claimTokens.forEach(claim => {
+                    if (!roleClaims[role].includes(claim)) {
+                        roleClaims[role].push(claim);
+                    }
+                });
+            } else {
+                addClaim(line);
+            }
+        }
+    }
+
+    return { claims: Array.from(claims), roleClaims };
+}
+
+function parsePermissions(
+    blocks: { body: string }[],
+    models: Map<string, ModelDefinition>,
+    roles: Set<string>,
+    claims: Set<string>,
+): Map<string, Partial<Record<PolicyAction, PermissionRule>>> {
+    const permissions = new Map<string, Partial<Record<PolicyAction, PermissionRule>>>();
+
+    for (const { body } of blocks) {
+        const modelBlockRegex = /model\s+(\w+)\s*{([\s\S]*?)}/g;
+        let modelMatch;
+        while ((modelMatch = modelBlockRegex.exec(body)) !== null) {
+            const [, modelName, modelBody] = modelMatch;
+            if (!models.has(modelName)) {
+                throw new Error(`Permissions block references unknown model "${modelName}".`);
+            }
+            const lines = modelBody
+                .split('\n')
+                .map(l => l.trim())
+                .filter(Boolean);
+            for (const line of lines) {
+                const actionMatch = line.match(/^(create|read|update|delete)\s*:\s*(.+)$/);
+                if (!actionMatch) continue;
+                const action = actionMatch[1] as PolicyAction;
+                const rawRule = actionMatch[2].trim();
+
+                const trimmedRule = rawRule.trim();
+                let requirementsPart = trimmedRule;
+                let condition: string | undefined;
+
+                if (trimmedRule.toLowerCase().startsWith('if ')) {
+                    requirementsPart = '';
+                    condition = trimmedRule.slice(3).trim();
+                } else {
+                    const split = trimmedRule.split(/\s+if\s+/i);
+                    requirementsPart = split[0];
+                    condition = split[1]?.trim();
+                }
+
+                const rule: PermissionRule = { roles: [], claims: [], condition };
+
+                const tokens = (requirementsPart || '')
+                    .split('|')
+                    .map(t => t.trim())
+                    .filter(Boolean);
+
+                for (const token of tokens) {
+                    if (!token) continue;
+                    if (token.includes('.')) {
+                        if (!claims.has(token)) {
+                            throw new Error(`Permissions reference unknown claim "${token}". Declare it in the claims block.`);
+                        }
+                        rule.claims.push(token);
+                    } else {
+                        if (!roles.has(token)) {
+                            throw new Error(`Permissions reference unknown role "${token}". Declare it in the roles block.`);
+                        }
+                        rule.roles.push(token);
+                    }
+                }
+
+                if (rule.roles.length === 0 && rule.claims.length === 0 && !rule.condition) {
+                    throw new Error(`Permissions for ${modelName}.${action} must specify roles/claims or an attribute condition.`);
+                }
+
+                if (!permissions.has(modelName)) {
+                    permissions.set(modelName, {});
+                }
+                permissions.get(modelName)![action] = rule;
+            }
+        }
+    }
+
+    return permissions;
+}
+
+function findBlocks(code: string, keyword: string): { body: string; start: number; end: number }[] {
+    const blocks: { body: string; start: number; end: number }[] = [];
+    let index = 0;
+
+    while (index < code.length) {
+        const keywordIndex = code.indexOf(keyword, index);
+        if (keywordIndex === -1) break;
+        const openIndex = code.indexOf('{', keywordIndex);
+        if (openIndex === -1) break;
+
+        let depth = 0;
+        let endIndex = -1;
+        for (let i = openIndex; i < code.length; i++) {
+            const ch = code[i];
+            if (ch === '{') depth++;
+            if (ch === '}') depth--;
+            if (depth === 0) {
+                endIndex = i;
+                break;
+            }
+        }
+
+        if (endIndex === -1) {
+            break;
+        }
+
+        blocks.push({ body: code.slice(openIndex + 1, endIndex), start: keywordIndex, end: endIndex });
+        index = endIndex + 1;
+    }
+
+  return blocks;
+}
+
+const RBAC_ACTIONS: PolicyAction[] = ['create', 'read', 'update', 'delete'];
+
+function compileAbacCondition(condition: string | undefined, model: ModelDefinition, allModels: ModelDefinition[]): string | undefined {
+  if (!condition || !condition.trim()) return undefined;
+  return compilePolicyToSql(condition, model, allModels);
+}
+
+function computeRbacSpecs(models: ModelDefinition[]): ModelRbacSpec[] {
+  return models.map(model => {
+    const actions: Record<string, CompiledPermissionRule | undefined> = {};
+    const perms = model.permissions ?? {};
+
+    for (const action of RBAC_ACTIONS) {
+      const rule = perms[action];
+      if (!rule) continue;
+      actions[action] = {
+        roles: rule.roles ?? [],
+        claims: rule.claims ?? [],
+        abacSql: compileAbacCondition(rule.condition, model, models),
+      };
+    }
+
+    const spec: ModelRbacSpec = {
+      modelName: model.name,
+      actions,
+      raw: perms,
+    };
+    model.rbacSpec = spec;
+    return spec;
+  });
+}
+
 export function parseForgeDsl(code: string): ModelDefinition[] {
     const modelDefs = new Map<string, ModelDefinition>();
     const uncommentedCode = code.replace(/\/\/.*$/gm, '');
+    const permissionsBlocks = findBlocks(uncommentedCode, 'permissions');
+    const permissionsStripped = permissionsBlocks.reduceRight(
+        (acc, block) => acc.slice(0, block.start) + acc.slice(block.end + 1),
+        uncommentedCode,
+    );
+    const roles = new Set(parseRoles(uncommentedCode));
+    const { claims, roleClaims } = parseClaims(uncommentedCode, roles);
+    const claimsSet = new Set(claims);
 
+    const codeForModels = permissionsStripped;
     const modelRegex = /model\s+(\w+)\s*{([^}]*)}/g;
     let match;
 
     // First pass: create all models so relations can be resolved
-    while ((match = modelRegex.exec(uncommentedCode)) !== null) {
+    while ((match = modelRegex.exec(codeForModels)) !== null) {
         const [, modelName, body] = match;
         const { schema } = parseModelFields(modelName, body);
         modelDefs.set(modelName, {
@@ -197,12 +406,16 @@ export function parseForgeDsl(code: string): ModelDefinition[] {
             relations: [],
             hooks: [],
             extensions: [],
+            roles: Array.from(roles),
+            claims: Array.from(claimsSet),
+            roleClaims,
+            permissions: {},
         });
     }
 
     // Second pass: parse relations now that all models are known
     modelRegex.lastIndex = 0;
-    while ((match = modelRegex.exec(uncommentedCode)) !== null) {
+    while ((match = modelRegex.exec(codeForModels)) !== null) {
         const [, modelName, body] = match;
         const modelDef = modelDefs.get(modelName)!;
         parseModelRelations(modelDef, body, modelDefs);
@@ -210,7 +423,7 @@ export function parseForgeDsl(code: string): ModelDefinition[] {
 
     // Third pass: parse policies, hooks, and extensions
     const blockRegex = /(policy|hook|extend)\s+([\w\.]+)\s*{((?:[^{}]|{(?:[^{}]|{[^{}]*})*})*)}/g;
-    while ((match = blockRegex.exec(uncommentedCode)) !== null) {
+    while ((match = blockRegex.exec(codeForModels)) !== null) {
         const [, type, target, body] = match;
         const bodyContent = body.trim();
 
@@ -259,7 +472,19 @@ export function parseForgeDsl(code: string): ModelDefinition[] {
         if (!hasPrimaryKey) {
             throw new Error(`Model "${model.name}" is missing a primary key. Add a field marked with "pk", e.g. "id: uuid pk".`);
         }
+
+        // will populate permissions after parsing permissions block
     }
+
+    const permissions = parsePermissions(permissionsBlocks, modelDefs, roles, claimsSet);
+    for (const model of allModelDefs) {
+        const perms = permissions.get(model.name);
+        if (perms) {
+            model.permissions = perms;
+        }
+    }
+
+    computeRbacSpecs(allModelDefs);
 
     return allModelDefs;
 }
@@ -290,6 +515,7 @@ export function compileForSandbox(code: string, config: Partial<ForgeConfig> = {
         const routesResult = generateFastifyAdapter(allModels);
 
         const boundSql = migrationResult.map(m => m.content).join('\n\n---\n\n');
+        const rbacSpecs = computeRbacSpecs(allModels);
         return {
             ast: ast,
             zod: zodResult.content,
@@ -300,6 +526,7 @@ export function compileForSandbox(code: string, config: Partial<ForgeConfig> = {
             models: allModels,
             migrations: migrationResult,
             config: mergedConfig,
+            rbac: rbacSpecs,
 
             // Required by runtime.ts
             zodSchemas: zodResult.content,

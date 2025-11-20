@@ -12,6 +12,33 @@ function toSnakeCase(str: string): string {
   return str.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`).replace(/^_/, '');
 }
 
+function renderPermissionGuard(modelName: string, action: 'create' | 'read' | 'update' | 'delete', permissions: any | undefined, recordRef: string): string {
+    const rule = permissions?.[action];
+    if (!rule) return '';
+
+    const rolesArray = JSON.stringify(rule.roles ?? []);
+    const claimsArray = JSON.stringify(rule.claims ?? []);
+    const condition = rule.condition
+        ? `((user, record) => ${rule.condition})(ctx.user, ${recordRef})`
+        : 'true';
+
+    return `
+        {
+            const requiredRoles = ${rolesArray};
+            const requiredClaims = ${claimsArray};
+            const userRoles = Array.isArray(ctx.user.roles) ? ctx.user.roles : (ctx.user.role ? [ctx.user.role] : []);
+            const hasRole = requiredRoles.length ? userRoles.some(r => requiredRoles.includes(r)) : false;
+            const userClaimKeys = ctx.user.claims ? Object.keys(ctx.user.claims) : [];
+            const hasClaim = requiredClaims.length ? requiredClaims.some(claim => userClaimKeys.includes(claim) || Boolean(ctx.user.claims?.[claim])) : false;
+            const baseAllowed = (requiredRoles.length || requiredClaims.length) ? (hasRole || hasClaim) : true;
+            const conditionOk = ${condition};
+            if (!(baseAllowed && conditionOk)) {
+                throw new AuthorizationError('User does not have permission to ${action} ${modelName}');
+            }
+        }
+    `;
+}
+
 export function generateDomainServices(models: ModelDefinition[], config: ForgeConfig): GenerationResult {
     const modelServices = models.map(m => `${toCamelCase(m.name)}Domain`).join(', ');
     const allModelPascalNames = models.map(m => toPascalCase(m.name));
@@ -49,15 +76,18 @@ class AuthorizationError extends Error {
         const findByIdGuard = findByIdPolicy
             ? `const canRead = (${findByIdPolicy.handlerSource}); if (result && !await canRead({ user: ctx.user, record: result })) { throw new AuthorizationError('User does not have permission to read this ${namePascal}'); }`
             : '';
+        const findByIdPermissionGuard = renderPermissionGuard(model.name, 'read', model.permissions, 'result');
 
         // --- CREATE ---
         const createPolicy = model.policies.create;
         const createAudit = config.audit
-            ? `ctx.audit.record('create', { model: '${namePascal}', id: result.id, userId: ctx.user.id, data: fullData });`
+            ? `ctx.audit.record('create', { model: '${namePascal}', id: result.id, userId: ctx.user.id, tenantId: ctx.user.tenantId, data: fullData });`
             : '';
         const createLogic = `
         const validatedData = zod.Create${namePascal}Schema.parse(data);
         let fullData = ${tenantField ? `{ ...validatedData, "${tenantField}": ctx.user.tenantId }` : 'validatedData' };
+
+        ${renderPermissionGuard(model.name, 'create', model.permissions, 'fullData')}
 
         ${getHooks('beforeCreate').map((hook, i) => `
         const beforeCreateHook${i} = ${hook.handlerSource};
@@ -93,7 +123,7 @@ class AuthorizationError extends Error {
             ? `const canUpdate = (${updatePolicy.handlerSource}); if (!await canUpdate({ user: ctx.user, record: recordToUpdate })) { throw new AuthorizationError('User does not have permission to update this ${namePascal}'); }`
             : '';
         const updateAudit = config.audit
-            ? `ctx.audit.record('update', { model: '${namePascal}', id: result.id, userId: ctx.user.id, updates: validatedData });`
+            ? `ctx.audit.record('update', { model: '${namePascal}', id: result.id, userId: ctx.user.id, tenantId: ctx.user.tenantId, updates: validatedData });`
             : '';
         const updateParams = config.multiTenant && tenantField
             ? `[id, ...Object.values(validatedData), ctx.user.tenantId]`
@@ -104,6 +134,7 @@ class AuthorizationError extends Error {
             return this.findById(ctx, id);
         }
         ${updateGuardFetch}
+        ${renderPermissionGuard(model.name, 'update', model.permissions, 'recordToUpdate')}
         ${updateGuardCheck}
         
         ${getHooks('beforeUpdate').map((hook, i) => `
@@ -137,11 +168,12 @@ class AuthorizationError extends Error {
             ? `const canDelete = (${deletePolicy.handlerSource}); if (!await canDelete({ user: ctx.user, record: recordToDelete })) { throw new AuthorizationError('User does not have permission to delete this ${namePascal}'); }`
             : '';
         const deleteAudit = config.audit
-            ? `ctx.audit.record('delete', { model: '${namePascal}', id, userId: ctx.user.id });`
+            ? `ctx.audit.record('delete', { model: '${namePascal}', id, userId: ctx.user.id, tenantId: ctx.user.tenantId });`
             : '';
         const deleteParams = config.multiTenant && tenantField ? `[id, ctx.user.tenantId]` : `[id]`;
         const deleteLogic = `
         ${deleteGuardFetch}
+        ${renderPermissionGuard(model.name, 'delete', model.permissions, 'recordToDelete')}
         ${deleteGuardCheck}
         
         ${getHooks('beforeDelete').map((hook, i) => `
@@ -235,6 +267,7 @@ class ${namePascal}Domain {
             return null;
         }
         const result = zod.${namePascal}Schema.parse(res.rows[0]);
+        ${findByIdPermissionGuard}
         ${findByIdGuard}
         return result;
     }

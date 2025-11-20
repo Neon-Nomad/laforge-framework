@@ -1,4 +1,4 @@
-import { ClassifiedError } from '../contract';
+import { ClassifiedError } from '../contract.js';
 
 const DEFAULT_TABLE = 'auto_migrate_placeholder';
 const DEFAULT_COLUMN = 'auto_column';

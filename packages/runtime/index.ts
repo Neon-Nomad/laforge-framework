@@ -2,6 +2,7 @@ import { compileForSandbox } from '../compiler/index.js';
 import { generateSqlTemplates } from '../compiler/sql/sqlGenerator.js';
 import type { CompilationOutput } from '../compiler/index.js';
 import { DatabaseConnection } from './db/database.js';
+import { AuditLogger } from './audit.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import vm from 'node:vm';
@@ -12,6 +13,10 @@ export interface UserContext {
   id: string;
   tenantId: string;
   role: string;
+  roles?: string[];
+  scopes?: string[];
+  email?: string;
+  claims?: Record<string, unknown>;
   [key: string]: any;
 }
 
@@ -19,26 +24,6 @@ export interface DomainContext {
   user: UserContext;
   db: DatabaseConnection;
   audit: AuditLogger;
-}
-
-export class AuditLogger {
-  private logs: any[] = [];
-
-  record(operation: string, data: any): void {
-    this.logs.push({
-      timestamp: new Date().toISOString(),
-      operation,
-      ...data,
-    });
-  }
-
-  getLogs(): any[] {
-    return this.logs;
-  }
-
-  clear(): void {
-    this.logs = [];
-  }
 }
 
 const nodeRequire = createRequire(import.meta.url);
@@ -58,6 +43,7 @@ export class LaForgeRuntime {
   private domainServices: any = {};
   private zodSchemas: any = {};
   private sqlQueries: any = {};
+  private auditLogFile: string;
 
   constructor(db: DatabaseConnection | any) {
     if (db && typeof (db as any).query === 'function' && typeof (db as any).exec === 'function') {
@@ -68,6 +54,7 @@ export class LaForgeRuntime {
     } else {
       throw new Error('Invalid database instance provided to LaForgeRuntime');
     }
+    this.auditLogFile = process.env.LAFORGE_AUDIT_LOG || path.resolve('.laforge', 'audit', 'audit.ndjson');
   }
 
   async compile(dsl: string): Promise<CompilationOutput> {
@@ -320,7 +307,7 @@ export class LaForgeRuntime {
       if (/^require\(/m.test(sanitizedCode)) {
         throw new Error('Disallowed top-level require() detected before the sandbox wrapper.');
       }
-      if (/new\s+Function\s*\(/i.test(sanitizedCode) || /\bFunction\s*\(/i.test(sanitizedCode)) {
+      if (/new\s+Function\s*\(/.test(sanitizedCode) || /\bFunction\s*\(/.test(sanitizedCode)) {
         throw new Error('Blocked Function constructor escape attempt.');
       }
 
@@ -372,7 +359,7 @@ export class LaForgeRuntime {
       );
     }
 
-    const audit = new AuditLogger();
+    const audit = new AuditLogger(this.db);
     const camelCaseDb = {
       exec: (sql: string) => this.db.exec(sql),
       query: async (text: string, params: any[] = []) => {
@@ -386,7 +373,8 @@ export class LaForgeRuntime {
       audit,
     };
 
-    console.log(`Executing ${operation} on ${modelName} as user ${user.id} (${user.role})`);
+    const displayRole = user.role ?? user.roles?.[0] ?? 'unknown';
+    console.log(`Executing ${operation} on ${modelName} as user ${user.id} (${displayRole})`);
 
     try {
       let result;

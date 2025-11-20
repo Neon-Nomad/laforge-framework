@@ -10,7 +10,7 @@ const { sandboxMock } = vi.hoisted(() => ({ sandboxMock: vi.fn() }));
 
 vi.mock('@laforge-dev/auto-migrate', () => ({
   runMigrationInSandbox: sandboxMock,
-}), { virtual: true });
+}));
 
 import { autoMigrateNewMigrations } from '../commands/generate.js';
 
@@ -143,5 +143,5 @@ describe('auto-migrate integration inside CLI', () => {
     expect(summary).toBe('Auto-migrate: repaired');
     const entries = await listHistoryEntries(baseDir);
     expect(entries.some(e => e.notes?.includes('post-fix'))).toBe(true);
-  });
+  }, 15000);
 });

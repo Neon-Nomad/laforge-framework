@@ -1,4 +1,4 @@
-import { ClassifiedError } from '../contract';
+import { ClassifiedError } from '../contract.js';
 
 type Detector = (line: string) => ClassifiedError | null;
 

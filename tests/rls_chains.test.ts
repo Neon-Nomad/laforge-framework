@@ -21,8 +21,8 @@ policy User.read {
   record.team.id === user.id
 }
 `);
-  // (SELECT j0.id FROM public.teams j0 WHERE j0.id = team_id) = current_setting('app.user_id')::uuid
-  expect(rls).toContain(`(SELECT j0.id FROM public.teams j0 WHERE j0.id = team_id) = current_setting('app.user_id')::uuid`);
+  // (SELECT j0.id FROM public.teams j0 WHERE j0.id = team_id) = laforge_user_id()
+  expect(rls).toContain(`(SELECT j0.id FROM public.teams j0 WHERE j0.id = team_id) = laforge_user_id()`);
 });
 
 test('1-hop relation chain with non-FK field: record.team.name', () => {
@@ -64,7 +64,7 @@ policy Project.read {
 }
 `);
   // j0 = Team, j1 = User
-  expect(rls).toContain(`(SELECT j1.id FROM public.teams j0 JOIN public.users j1 ON j1.id = j0.owner_id WHERE j0.id = team_id) = current_setting('app.user_id')::uuid`);
+  expect(rls).toContain(`(SELECT j1.id FROM public.teams j0 JOIN public.users j1 ON j1.id = j0.owner_id WHERE j0.id = team_id) = laforge_user_id()`);
 });
 
 test('Collection predicate: .some()', () => {
@@ -85,7 +85,7 @@ policy Post.read {
     record.comments.some(c => c.id === user.id)
 }
 `);
-  expect(rls).toContain(`EXISTS (SELECT 1 FROM public.comments s0 WHERE s0.post_id = id AND (s0.id = current_setting('app.user_id')::uuid))`);
+  expect(rls).toContain(`EXISTS (SELECT 1 FROM public.comments s0 WHERE s0.post_id = id AND (s0.id = laforge_user_id()))`);
 });
 
 test('Collection predicate: .every()', () => {
@@ -120,7 +120,7 @@ test('Collection predicate: .includes()', () => {
     record.members.includes(user.id)
   }
   `);
-  expect(rls).toContain(`current_setting('app.user_id')::uuid IN (SELECT s0.id FROM public.users s0 WHERE s0.team_id = id)`);
+  expect(rls).toContain(`laforge_user_id() IN (SELECT s0.id FROM public.users s0 WHERE s0.team_id = id)`);
 });
 
 test('Negative: Chain depth limit exceeded', () => {

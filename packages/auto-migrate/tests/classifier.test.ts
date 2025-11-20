@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { classifyErrors } from '../src/classifier';
+import { classifyErrors } from '../src/classifier/index.js';
 
 describe('classifier', () => {
   it('detects known Postgres error patterns', () => {

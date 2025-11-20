@@ -100,7 +100,7 @@ Extend `nodeToSql`:
 ### 5. Tenant Safety
 
 Whenever a chain reaches a model with a `tenant` field:
-- Inject `AND child.tenant_id = current_setting('app.tenant_id')` into join/subquery automatically.
+- Inject `AND child.tenant_id = laforge_tenant_id()` into join/subquery automatically.
 - If a policy explicitly compares tenant fields, still include the guard (idempotent).
 - For multi-tenant apps, reject cross-tenant joins (e.g., referencing a model without tenant column unless flagged).
 

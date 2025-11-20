@@ -147,7 +147,7 @@ hook Post.beforeCreate {
   ```sql
   CREATE POLICY post_read_tenant_scope
   ON posts
-  USING ((tenant_id = current_setting('app.tenant_id')::uuid));
+  USING ((tenant_id = laforge_tenant_id()));
   ```
 - **Zod types**
   ```ts

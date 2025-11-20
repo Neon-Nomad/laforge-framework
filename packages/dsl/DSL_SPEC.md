@@ -53,7 +53,7 @@ This document reflects exactly how the shipped compiler parses, validates, and g
 
 ## 9) RLS policy generation rules
 - Policies are generated per model; table RLS is enabled and existing forge policies are dropped before recreation.
-- Tenant guard: if a field is marked `tenant` and multiTenant=true, RLS adds `tenantField = current_setting('app.tenant_id')::uuid` to SELECT/INSERT/UPDATE/DELETE.
+- Tenant guard: if a field is marked `tenant` and multiTenant=true, RLS adds `tenantField = laforge_tenant_id()` to SELECT/INSERT/UPDATE/DELETE.
 - User context allowed properties: `user.id`, `user.tenantId`, `user.role`; other properties throw.
 - Supported expressions:
   - Logical `&&`/`||`, comparisons `===`, `!==`, `==`, `!=`, `>`, `<`, `>=`, `<=`, unary `!`.
@@ -81,4 +81,3 @@ This document reflects exactly how the shipped compiler parses, validates, and g
 ## 12) Migration + timeline integration (CLI/Studio context)
 - Snapshots are recorded after each successful migration generation; diffs drive timeline/ERD views.
 - Safe-mode fallbacks are written alongside skipped destructive migrations for manual application.
-

@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('../src/sandbox', async () => {
-  const actual = await vi.importActual<typeof import('../src/sandbox')>('../src/sandbox');
+vi.mock('../src/sandbox/index.js', async () => {
+  const actual = await vi.importActual<typeof import('../src/sandbox/index.js')>('../src/sandbox/index.js');
   return {
     ...actual,
     spawnSandbox: vi.fn(),
   };
 });
 
-import { runMigrationInSandbox } from '../src';
-import { spawnSandbox, SandboxRunError } from '../src/sandbox';
+import { runMigrationInSandbox } from '../src/index.js';
+import { spawnSandbox, SandboxRunError } from '../src/sandbox/index.js';
 
 describe('runMigrationInSandbox', () => {
   it('returns success when no errors are classified', async () => {

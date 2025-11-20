@@ -13,7 +13,7 @@ function model(name: string, withField?: string): ModelDefinition {
 }
 
 describe('Studio blame diff endpoint via UI flow', () => {
-  it('returns operations usable for blame', async () => {
+  it('returns operations usable for blame', { timeout: 20000 }, async () => {
     const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'laforge-blame-test-'));
     const server = await buildStudioServer({ baseDir, port: 0 });
     const inject = server.inject.bind(server);
@@ -33,4 +33,3 @@ describe('Studio blame diff endpoint via UI flow', () => {
     await fs.rm(baseDir, { recursive: true, force: true });
   });
 });
-

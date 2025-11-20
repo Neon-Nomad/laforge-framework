@@ -23,6 +23,14 @@ export interface FieldOptions {
 
 export type ModelSchema = Record<string, FieldType | FieldOptions | Relation<RelationType>>;
 
+// --- RBAC ---
+
+export interface PermissionRule {
+  roles: string[];
+  claims: string[];
+  condition?: string;
+}
+
 // --- Type Inference Helpers ---
 
 type ResolveFieldType<T> = T extends "uuid" | "string" | "text"
@@ -58,6 +66,10 @@ export interface UserContext {
   id: string;
   tenantId: string;
   role: string;
+  roles?: string[];
+  scopes?: string[];
+  email?: string;
+  claims?: Record<string, unknown>;
   [key: string]: any;
 }
 
@@ -127,6 +139,11 @@ export interface ModelDefinition {
   };
   hooks: HookDefinition[];
   extensions: ExtensionDefinition[];
+  roles?: string[];
+  claims?: string[];
+  roleClaims?: Record<string, string[]>;
+  permissions?: Partial<Record<PolicyAction, PermissionRule>>;
+  rbacSpec?: ModelRbacSpec;
 }
 
 export type SupportedDb = 'postgres' | 'sqlite' | 'mysql';
@@ -147,4 +164,24 @@ export interface ForgeConfig {
 export interface GenerationResult {
     filePath: string;
     content: string;
+}
+// --- RBAC ---
+
+export interface CompiledPermissionRule {
+  roles: string[];
+  claims: string[];
+  abacSql?: string;
+}
+
+export interface ModelRbacSpec {
+  modelName: string;
+  actions: {
+    create?: CompiledPermissionRule;
+    read?: CompiledPermissionRule;
+    update?: CompiledPermissionRule;
+    delete?: CompiledPermissionRule;
+    list?: CompiledPermissionRule;
+    [customAction: string]: CompiledPermissionRule | undefined;
+  };
+  raw?: Partial<Record<PolicyAction, PermissionRule>>;
 }

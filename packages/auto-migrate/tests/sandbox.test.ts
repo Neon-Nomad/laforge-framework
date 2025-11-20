@@ -14,7 +14,7 @@ vi.mock('node:child_process', () => ({
 
 const { execFileSyncMock, spawnSyncMock } = childProcessMocks;
 
-import { spawnSandbox, SandboxRunError } from '../src/sandbox';
+import { spawnSandbox, SandboxRunError } from '../src/sandbox/index.js';
 
 describe('sandbox runner', () => {
   beforeEach(() => {
@@ -50,8 +50,14 @@ describe('sandbox runner', () => {
       throw error;
     });
 
-    const thrown = await spawnSandbox('').catch((error) => error as SandboxRunError);
+    let thrown: SandboxRunError | null = null;
+    try {
+      await spawnSandbox('');
+    } catch (error) {
+      thrown = error as SandboxRunError;
+    }
+
     expect(thrown).toBeInstanceOf(SandboxRunError);
-    expect(thrown.logs[0]).toContain('docker run failed');
+    expect(thrown?.logs[0]).toContain('docker run failed');
   });
 });

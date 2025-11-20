@@ -16,6 +16,8 @@ import {
   resolveEntrySelector,
   loadEntryModels,
 } from '../lib/history.js'
+import { listAuditEntries } from '../lib/auditStore.js'
+import { verifyChain, verifySnapshot } from '../lib/signing.js'
 import { generateMigrations } from '../../compiler/diffing/migrationGenerator.js'
 import { DatabaseConnection } from '../../runtime/db/database.js'
 import type { ModelDefinition } from '../../compiler/ast/types.js'
@@ -202,6 +204,41 @@ export async function buildStudioServer(opts: { baseDir?: string; port?: number 
     reply.send({ branch, entryId: entry.id, ...graph })
   })
 
+  fastify.get('/api/audit', async (request, reply) => {
+    const query = request.query as { tenant?: string; model?: string; action?: string; user?: string; since?: string; limit?: string }
+    const limit = query.limit ? Number(query.limit) : 100
+    const entries = await listAuditEntries(
+      {
+        tenant: query.tenant,
+        model: query.model,
+        action: query.action,
+        user: query.user,
+        since: query.since,
+      },
+      { limit, baseDir },
+    )
+    reply.send({ entries })
+  })
+
+  fastify.get('/api/integrity', async (request, reply) => {
+    const query = request.query as { branch?: string }
+    const branch = query.branch || (await getCurrentBranch(baseDir))
+    const entries = await listHistoryEntries(baseDir, { branch })
+    const chain = await verifyChain(baseDir, branch)
+    const snapshots = await Promise.all(
+      entries.map(async e => ({
+        id: e.id,
+        createdAt: e.createdAt,
+        hash: e.hash,
+        prevHash: e.prevHash,
+        approved: !!e.approvals?.length,
+        approvals: e.approvals || [],
+        verified: await verifySnapshot(e),
+      })),
+    )
+    reply.send({ branch, chain, snapshots })
+  })
+
   return fastify
 }
 
@@ -312,6 +349,11 @@ function renderHtml(port: number): string {
       .changed-field { color: var(--accent); animation: glow 1.6s ease-in-out infinite; }
       @keyframes pulse { 0% { transform: translateY(0); } 50% { transform: translateY(-2px); } 100% { transform: translateY(0); } }
       @keyframes glow { 0% { text-shadow: 0 0 0px rgba(0,210,255,0.4); } 50% { text-shadow: 0 0 12px rgba(0,210,255,0.8); } 100% { text-shadow: 0 0 0px rgba(0,210,255,0.4); } }
+      table { width: 100%; border-collapse: collapse; font-size: 12px; }
+      th, td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; }
+      .status-ok { color: #4ade80; }
+      .status-warn { color: #facc15; }
+      .status-bad { color: #f87171; }
     </style>
   </head>
   <body>
@@ -349,6 +391,61 @@ function renderHtml(port: number): string {
           <span class="badge" id="branch-label"></span>
         </div>
         <div class="timeline" id="timeline"></div>
+      </section>
+
+      <section class="panel stack">
+        <div class="row" style="justify-content:space-between; align-items:center;">
+          <h2 style="margin:0;">Audit Trail</h2>
+          <button class="btn-ghost" id="refresh-audit">Refresh</button>
+        </div>
+        <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); gap:8px;">
+          <input id="audit-tenant" placeholder="tenant" />
+          <input id="audit-user" placeholder="user id" />
+          <input id="audit-model" placeholder="model" />
+          <input id="audit-action" placeholder="action" />
+          <input id="audit-since" placeholder="since (e.g., 1h)" />
+          <input id="audit-limit" placeholder="limit" value="50" />
+        </div>
+        <div style="overflow:auto; max-height:360px;">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Tenant</th>
+                <th>User</th>
+                <th>Model</th>
+                <th>Action</th>
+                <th>Data</th>
+              </tr>
+            </thead>
+            <tbody id="audit-rows">
+              <tr><td colspan="6" class="muted">No audit entries yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel stack">
+        <div class="row" style="justify-content:space-between; align-items:center;">
+          <h2 style="margin:0;">Integrity</h2>
+          <button class="btn-ghost" id="refresh-integrity">Refresh</button>
+        </div>
+        <div id="integrity-summary" class="muted">Chain not verified yet.</div>
+        <div style="overflow:auto; max-height:280px;">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Snapshot</th>
+                <th>Hash</th>
+                <th>Signature</th>
+                <th>Approvals</th>
+              </tr>
+            </thead>
+            <tbody id="integrity-rows">
+              <tr><td colspan="4" class="muted">No integrity data.</td></tr>
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section class="panel stack">
@@ -402,14 +499,97 @@ function renderHtml(port: number): string {
       const summaryCards = document.getElementById('summary-cards');
       const replayBtn = document.getElementById('replay-btn');
       const cherryBtn = document.getElementById('cherry-btn');
+      const auditRows = document.getElementById('audit-rows');
+      const auditTenant = document.getElementById('audit-tenant');
+      const auditUser = document.getElementById('audit-user');
+      const auditModel = document.getElementById('audit-model');
+      const auditAction = document.getElementById('audit-action');
+      const auditSince = document.getElementById('audit-since');
+      const auditLimit = document.getElementById('audit-limit');
       const erdCanvas = document.getElementById('erd-canvas');
       const erdDetail = document.getElementById('erd-detail');
       const blameBtn = document.getElementById('show-blame');
+      const integrityRows = document.getElementById('integrity-rows');
+      const integritySummary = document.getElementById('integrity-summary');
 
       async function fetchJSON(url, opts) {
         const res = await fetch(url, opts);
         if (!res.ok) throw new Error(await res.text());
         return res.json();
+      }
+
+      async function loadAudit() {
+        const params = new URLSearchParams();
+        if (auditTenant.value) params.append('tenant', auditTenant.value);
+        if (auditUser.value) params.append('user', auditUser.value);
+        if (auditModel.value) params.append('model', auditModel.value);
+        if (auditAction.value) params.append('action', auditAction.value);
+        if (auditSince.value) params.append('since', auditSince.value);
+        const limitVal = Number(auditLimit.value) || 50;
+        params.append('limit', String(limitVal));
+        const data = await fetchJSON('/api/audit?' + params.toString());
+        renderAudit(data.entries || []);
+      }
+
+      function renderAudit(entries) {
+        auditRows.innerHTML = '';
+        if (!entries.length) {
+          auditRows.innerHTML = '<tr><td colspan="6" class="muted">No audit entries found.</td></tr>';
+          return;
+        }
+        entries.forEach(entry => {
+          const tr = document.createElement('tr');
+          const time = new Date(entry.timestamp).toLocaleString();
+          tr.innerHTML = \`
+            <td>\${time}</td>
+            <td>\${entry.tenantId || ''}</td>
+            <td>\${entry.userId || ''}\${entry.requestId ? \`<div class="muted">req \${entry.requestId}</div>\` : ''}</td>
+            <td>\${entry.model || ''}</td>
+            <td>\${entry.type}</td>
+            <td style="max-width:280px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">\${entry.data ? JSON.stringify(entry.data) : (entry.artifactHash || '')}</td>
+          \`;
+          auditRows.appendChild(tr);
+        });
+      }
+
+      async function loadIntegrity() {
+        const data = await fetchJSON('/api/integrity?branch=' + encodeURIComponent(currentBranch));
+        renderIntegrity(data);
+      }
+
+      function renderIntegrity(data) {
+        if (!data || !data.snapshots) {
+          integritySummary.textContent = 'No integrity data.';
+          integrityRows.innerHTML = '<tr><td colspan="4" class="muted">No integrity data.</td></tr>';
+          return;
+        }
+        const chainOk = data.chain?.ok;
+        const unsigned = (data.chain?.unsigned || []).length;
+        integritySummary.innerHTML = chainOk
+          ? '<span class="status-ok">Chain verified.</span> Unsigned: ' + unsigned
+          : '<span class="status-bad">Chain broken' + (data.chain?.brokenAt ? ' at ' + data.chain.brokenAt : '') + '.</span>';
+
+        integrityRows.innerHTML = '';
+        if (!data.snapshots.length) {
+          integrityRows.innerHTML = '<tr><td colspan="4" class="muted">No snapshots.</td></tr>';
+          return;
+        }
+        data.snapshots.forEach(snap => {
+          const sig = snap.verified ? '<span class="status-ok">verified</span>' : '<span class="status-warn">unsigned</span>';
+          const approvals = snap.approvals?.length || 0;
+          const row = document.createElement('tr');
+          row.innerHTML =
+            '<td>' +
+            snap.id +
+            '</td><td style=\"font-family: \\'JetBrains Mono\\', monospace; font-size:11px;\">' +
+            (snap.hash || '') +
+            '</td><td>' +
+            sig +
+            '</td><td>' +
+            (approvals ? approvals + ' entries' : 'none') +
+            '</td>';
+          integrityRows.appendChild(row);
+        });
       }
 
       async function loadBranches() {
@@ -430,6 +610,7 @@ function renderHtml(port: number): string {
         await fetchJSON('/api/branches/switch', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name }) });
         await loadBranches();
         await loadTimeline();
+        await loadIntegrity();
       }
 
       async function createBranch() {
@@ -439,6 +620,7 @@ function renderHtml(port: number): string {
         newBranchInput.value = '';
         await loadBranches();
         await loadTimeline();
+        await loadIntegrity();
       }
 
       async function loadTimeline() {
@@ -672,6 +854,8 @@ function renderHtml(port: number): string {
       document.getElementById('switch-branch').onclick = switchBranch;
       document.getElementById('create-branch').onclick = createBranch;
       document.getElementById('refresh-branches').onclick = async () => { await loadBranches(); await loadTimeline(); };
+      document.getElementById('refresh-audit').onclick = loadAudit;
+      document.getElementById('refresh-integrity').onclick = loadIntegrity;
       document.getElementById('diff-btn').onclick = diffSelected;
       replayBtn.onclick = replayEntry;
       cherryBtn.onclick = cherryPick;
@@ -681,6 +865,8 @@ function renderHtml(port: number): string {
       (async () => {
         await loadBranches();
         await loadTimeline();
+        await loadAudit();
+        await loadIntegrity();
         await diffSelected();
       })();
     </script>

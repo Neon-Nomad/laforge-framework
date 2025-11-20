@@ -40,12 +40,14 @@ export function generateReactApplication(models: ModelDefinition[], _config: For
 }
 
 function buildUiModel(model: ModelDefinition): UiModel {
-  const fields = Object.entries(model.schema).map(([name, definition]) => {
-    const fieldType = typeof definition === 'string' ? definition : definition.type;
-    const optional = typeof definition === 'object' && !!definition.optional;
-    const primaryKey = typeof definition === 'object' && !!definition.primaryKey;
-    return { name, type: fieldType, optional, primaryKey };
-  });
+  const fields = Object.entries(model.schema)
+    .filter(([, definition]) => !(typeof definition === 'object' && (definition as any).__typeName === 'Relation'))
+    .map(([name, definition]) => {
+      const fieldType = typeof definition === 'string' ? definition : definition.type;
+      const optional = typeof definition === 'object' && 'optional' in definition && !!definition.optional;
+      const primaryKey = typeof definition === 'object' && 'primaryKey' in definition && !!definition.primaryKey;
+      return { name, type: fieldType, optional, primaryKey };
+    });
 
   const pluralLabel = pluralize(model.name);
   const routeSegment = toRouteSegment(pluralLabel);

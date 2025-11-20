@@ -15,6 +15,7 @@
     "laforge-dev-cli": "./dist/packages/cli/index.js"
   },
   "scripts": {
+    "clean": "node -e \"const fs=require('fs');['dist','packages/auto-migrate/dist','generated_frontend/frontend/dist'].forEach(p=>fs.rmSync(p,{recursive:true,force:true}));['tsconfig.tsbuildinfo','packages/auto-migrate/tsconfig.tsbuildinfo'].forEach(p=>fs.rmSync(p,{force:true}));\"",
     "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true});\" && tsc -p tsconfig.json",
     "test": "npm run test:backend && npm run test:frontend",
     "test:backend": "vitest run --config vitest.config.ts",
@@ -29,17 +30,18 @@
     "packages/*"
   ],
   "dependencies": {
-    "@laforge-dev/auto-migrate": "workspace:*",
     "@babel/parser": "^7.23.6",
     "@babel/traverse": "^7.23.6",
     "@babel/types": "^7.23.6",
     "@fastify/cors": "^8.4.2",
+    "@laforge-dev/auto-migrate": "workspace:*",
+    "archiver": "^6.0.0",
     "better-sqlite3": "^9.6.0",
     "chalk": "^5.3.0",
     "commander": "^11.1.0",
     "diff": "^5.1.0",
     "fastify": "^4.25.1",
-    "archiver": "^6.0.0",
+    "jose": "^5.2.4",
     "mysql2": "^3.9.7",
     "pg": "^8.11.3",
     "picocolors": "^1.0.0",

@@ -8,6 +8,12 @@ import { registerMigrateCommand } from './commands/migrate.js';
 import { registerStatusCommand } from './commands/status.js';
 import { registerStudioCommand } from './commands/studio.js';
 import { registerTimelineCommand } from './commands/timeline.js';
+import { registerAuditCommand } from './commands/audit.js';
+import { registerSignCommand } from './commands/sign.js';
+import { registerVerifyCommand } from './commands/verify.js';
+import { registerApprovalCommands } from './commands/approval.js';
+import { registerDeployCommand } from './commands/deploy.js';
+import { registerExportCommand } from './commands/export.js';
 
 const program = new Command();
 
@@ -24,5 +30,11 @@ registerMigrateCommand(program);
 registerStatusCommand(program);
 registerStudioCommand(program);
 registerTimelineCommand(program);
+registerAuditCommand(program);
+registerSignCommand(program);
+registerVerifyCommand(program);
+registerApprovalCommands(program);
+registerDeployCommand(program);
+registerExportCommand(program);
 
 program.parseAsync(process.argv);

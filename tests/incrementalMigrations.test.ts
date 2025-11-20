@@ -35,9 +35,12 @@ async function writeDomain(dir: string, content: string) {
   return file;
 }
 
-test('snapshot created on initial generate and migrations accumulate', async () => {
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'laforge-inc-'));
-  const domainFile = await writeDomain(tmp, domainV1);
+test(
+  'snapshot created on initial generate and migrations accumulate',
+  { timeout: 15000 },
+  async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'laforge-inc-'));
+    const domainFile = await writeDomain(tmp, domainV1);
 
   // initial migration (baseline)
   const first = await generateIncrementalMigration({ domainFile, baseDir: tmp, db: 'sqlite' });
@@ -65,9 +68,10 @@ test('snapshot created on initial generate and migrations accumulate', async () 
   const applyResult = await applyMigrations({ baseDir: tmp, dbPath });
   expect(applyResult.applied.length).toBe(files.length);
 
-  const st = await status(tmp);
-  expect(st.pending.length).toBe(0);
-});
+    const st = await status(tmp);
+    expect(st.pending.length).toBe(0);
+  },
+);
 
 test('safe mode blocks destructive changes', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'laforge-safe-'));

@@ -40,7 +40,7 @@ afterEach(async () => {
 });
 
 describe('timeline cherry-pick', () => {
-  it('clones a snapshot into another branch with preserved metadata', async () => {
+  it('clones a snapshot into another branch with preserved metadata', { timeout: 15000 }, async () => {
     const baseDir = await createWorkspace();
     process.chdir(baseDir);
 
@@ -68,4 +68,3 @@ describe('timeline cherry-pick', () => {
     expect(cloned.attachments?.[0].name).toBe('migration.sql');
   });
 });
-

@@ -1,12 +1,12 @@
-import { classifyErrors } from './classifier';
-import type { ClassifiedError, SandboxResult } from './contract';
-import { repairMigration } from './repair';
-import { spawnSandbox, SandboxRunError } from './sandbox';
+import { classifyErrors } from './classifier/index.js';
+import type { ClassifiedError, SandboxResult } from './contract.js';
+import { repairMigration } from './repair/index.js';
+import { spawnSandbox, SandboxRunError } from './sandbox/index.js';
 
-export type { ClassifiedError, SandboxResult, ErrorKind } from './contract';
-export { classifyErrors } from './classifier';
-export { repairMigration } from './repair';
-export { spawnSandbox } from './sandbox';
+export type { ClassifiedError, SandboxResult, ErrorKind } from './contract.js';
+export { classifyErrors } from './classifier/index.js';
+export { repairMigration } from './repair/index.js';
+export { spawnSandbox } from './sandbox/index.js';
 
 export async function runMigrationInSandbox(migrationSql: string): Promise<SandboxResult> {
   let logs: string[] = [];

@@ -102,6 +102,7 @@ open http://localhost:4173
 ## Language Specification
 
 - Full DSL reference: [docs/DSL_SPEC.md](docs/DSL_SPEC.md)
+- Philosophy: [docs/PHILOSOPHY.md](docs/PHILOSOPHY.md)
 
 ## DSL Example
 

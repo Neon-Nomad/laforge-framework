@@ -16,7 +16,7 @@ const model = (name: string): ModelDefinition => ({
 });
 
 describe('/api/migrations', () => {
-  it('lists migrations and can prepare rollback bundle', async () => {
+  it('lists migrations and can prepare rollback bundle and apply', async () => {
     const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'laforge-migrations-'));
     const entry = await recordHistoryEntry({
       kind: 'snapshot',
@@ -41,5 +41,14 @@ describe('/api/migrations', () => {
     expect(body.bundle).toContain(entry.id);
     const exists = await fs.access(body.bundle).then(() => true).catch(() => false);
     expect(exists).toBe(true);
+
+    const apply = await server.inject({
+      method: 'POST',
+      url: '/api/migrations/apply',
+      payload: { id: entry.id },
+    });
+    expect(apply.statusCode).toBe(200);
+    const applyJson = apply.json() as any;
+    expect(applyJson.applied).toBe(true);
   });
 });

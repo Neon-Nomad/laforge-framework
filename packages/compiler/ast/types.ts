@@ -19,6 +19,9 @@ export interface FieldOptions {
   default?: string; // Raw SQL default value, e.g., "now()" or "uuid_generate_v4()"
   optional?: boolean;
   unique?: boolean;
+  pii?: boolean;
+  secret?: boolean;
+  residency?: string;
 }
 
 export type ModelSchema = Record<string, FieldType | FieldOptions | Relation<RelationType>>;

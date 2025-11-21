@@ -115,19 +115,26 @@ function parseModelFields(modelName: string, body: string): { schema: ModelSchem
         const fieldMatch = line.match(/^(\w+):\s*(\w+)/);
         if (fieldMatch) {
             const [, name, type] = fieldMatch;
-            const normalizedType = type === 'int' ? 'integer' : type;
-            const options: FieldOptions = { type: normalizedType as FieldType };
-            const restOfLine = line.substring(fieldMatch[0].length).trim();
+        const normalizedType = type === 'int' ? 'integer' : type;
+        const options: FieldOptions = { type: normalizedType as FieldType };
+        const restOfLine = line.substring(fieldMatch[0].length).trim();
 
-            if (restOfLine.includes('pk')) options.primaryKey = true;
-            if (restOfLine.includes('tenant')) options.tenant = true;
-            if (restOfLine.includes('optional')) options.optional = true;
-            if (restOfLine.includes('unique')) options.unique = true;
+        if (restOfLine.includes('pk')) options.primaryKey = true;
+        if (restOfLine.includes('tenant')) options.tenant = true;
+        if (restOfLine.includes('optional')) options.optional = true;
+        if (restOfLine.includes('unique')) options.unique = true;
+        if (restOfLine.includes('pii')) options.pii = true;
+        if (restOfLine.includes('secret')) options.secret = true;
 
-            const defaultMatch = restOfLine.match(/default\s+("([^"]*)"|'([^']*)'|([\w\(\)]+))/);
-            if (defaultMatch) {
-                options.default = defaultMatch[2] || defaultMatch[3] || defaultMatch[4];
-            }
+        const residencyMatch = restOfLine.match(/residency\s*\(\s*([^)]+)\s*\)/i);
+        if (residencyMatch) {
+            options.residency = residencyMatch[1].trim();
+        }
+
+        const defaultMatch = restOfLine.match(/default\s+("([^"]*)"|'([^']*)'|([\w\(\)]+))/);
+        if (defaultMatch) {
+            options.default = defaultMatch[2] || defaultMatch[3] || defaultMatch[4];
+        }
 
             // Explicitly carry nullability so downstream consumers don't have to infer undefined as false.
             if (options.optional !== true) options.optional = false;

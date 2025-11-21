@@ -113,17 +113,19 @@ function redactObject(obj: any, piiFields: Set<string>): any {
   return out;
 }
 
-export function applyPiiRedaction() {
+export function applyPiiRedaction(getFields?: () => string[]) {
   return async function redact(_req: FastifyRequest, _reply: FastifyReply, payload: any) {
     const envFields = (process.env.PII_FIELDS || '')
       .split(',')
       .map(s => s.trim())
       .filter(Boolean);
+    const dynamicFields = getFields ? getFields().filter(Boolean) : [];
+    const merged = [...envFields, ...dynamicFields];
     const revealAllowed = process.env.ALLOW_PII_REVEAL === 'true';
-    if (!envFields.length || revealAllowed) {
+    if (!merged.length || revealAllowed) {
       return payload;
     }
-    const piiFields = new Set(envFields);
+    const piiFields = new Set(merged);
     if (typeof payload === 'string') {
       try {
         const parsed = JSON.parse(payload);

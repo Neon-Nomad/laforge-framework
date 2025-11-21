@@ -7,6 +7,7 @@ import { createAuthPreHandler, issueMockToken, loadAuthConfigFromEnv } from './a
 import { applyPiiRedaction, applySecurityHeaders, createRateLimiter, createWafShield, parseRateLimit } from './controls.js';
 import { metrics, recordCompileDuration, recordHttpRequest, recordModelOperation, recordPolicyReject } from '../metrics.js';
 import { withSpan } from '../tracing.js';
+import { collectMaskedFields } from '../dataProtection.js';
 
 const server = Fastify({
   logger: {
@@ -24,6 +25,11 @@ const server = Fastify({
 const rateConfig = parseRateLimit(process.env.RATE_LIMIT || '100/min');
 const rateLimiter = createRateLimiter(rateConfig);
 const wafShield = createWafShield();
+const getPiiFields = () => {
+  const compiled = runtime.getCompiledCode?.();
+  if (!compiled) return [];
+  return collectMaskedFields(compiled.models);
+};
 
 // Allow API clients to call the compiler runtime
 await server.register(cors, {
@@ -54,7 +60,7 @@ server.addHook('onResponse', (request, reply, done) => {
   done();
 });
 server.addHook('onSend', applySecurityHeaders());
-server.addHook('onSend', applyPiiRedaction());
+server.addHook('onSend', applyPiiRedaction(getPiiFields));
 
 // Health check
 server.get('/health', async () => ({ status: 'ok', message: 'LaForge Backend is running!' }));

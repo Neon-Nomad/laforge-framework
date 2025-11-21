@@ -3,16 +3,40 @@ import { getCurrentBranch, listHistoryEntries } from '../lib/history.js';
 import { verifyChain } from '../lib/signing.js';
 import { isApproved } from '../lib/approvals.js';
 import { verifyProvenance } from '../lib/provenance.js';
+import { buildBlueGreenPlan } from '../lib/deploymentHardening.js';
 
 export function registerDeployCommand(program: Command) {
   program
     .command('deploy')
-    .description('Deployment guard (verifies chain/approvals before real deploy)')
+    .description('Deployment guard (verifies chain/approvals or produces rollout plan)')
     .option('--branch <branch>', 'Branch to validate')
+    .option('--strategy <strategy>', 'guard | bluegreen', 'guard')
     .option('--require-signed', 'Require signed chain', false)
     .option('--require-approved', 'Require latest snapshot approval', false)
     .option('--require-provenance', 'Require compiled.json hash matches provenance', false)
+    .option('--traffic-steps <steps>', 'Comma separated traffic ramp percentages (blue/green plan)', (value: string) =>
+      value
+        .split(',')
+        .map(s => parseInt(s.trim(), 10))
+        .filter(n => !Number.isNaN(n)),
+    )
+    .option('--latency-budget <ms>', 'Latency budget in ms before auto-pause (blue/green plan)', (v: string) =>
+      parseInt(v, 10),
+    )
+    .option('--error-budget <fraction>', 'Error budget threshold before auto-pause (blue/green plan)', (v: string) =>
+      parseFloat(v),
+    )
     .action(async opts => {
+      if (opts.strategy === 'bluegreen') {
+        const plan = buildBlueGreenPlan({
+          trafficSteps: opts.trafficSteps && opts.trafficSteps.length ? opts.trafficSteps : undefined,
+          latencyBudgetMs: typeof opts.latencyBudget === 'number' && !Number.isNaN(opts.latencyBudget) ? opts.latencyBudget : undefined,
+          errorBudget: typeof opts.errorBudget === 'number' && !Number.isNaN(opts.errorBudget) ? opts.errorBudget : undefined,
+        });
+        console.log(JSON.stringify(plan, null, 2));
+        return;
+      }
+
       const baseDir = process.cwd();
       const branch = opts.branch || (await getCurrentBranch(baseDir));
       if (opts.requireSigned) {

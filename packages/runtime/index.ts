@@ -10,6 +10,7 @@ import ts from 'typescript';
 import { createRequire } from 'node:module';
 import { withSpan } from './tracing.js';
 import crypto from 'node:crypto';
+import { collectSecretFields, decryptSecretFields, encryptSecretFields, ensureMasterKey, ensureSecretKey, validateResidency } from './dataProtection.js';
 export { runPolicyChaos } from './policyChaos.js';
 
 export interface UserContext {
@@ -382,6 +383,20 @@ export class LaForgeRuntime {
       );
     }
 
+    const model = this.compiledCode.models.find(m => m.name === modelName);
+    if (!model) {
+      throw new Error(`Model not found: ${modelName}`);
+    }
+
+    const secretFields = collectSecretFields(model);
+    const hasSecrets = secretFields.length > 0;
+    const secretKey = hasSecrets && !ensureMasterKey() ? ensureSecretKey() : undefined;
+
+    const enforcedResidency = process.env.DATA_RESIDENCY || process.env.LAFORGE_RESIDENCY;
+    if (operation === 'create' || operation === 'update') {
+      validateResidency(model, data, enforcedResidency);
+    }
+
     const audit = new AuditLogger(this.db);
     const camelCaseDb = {
       exec: (sql: string) => this.db.exec(sql),
@@ -402,15 +417,20 @@ export class LaForgeRuntime {
     try {
       let result;
 
+      let incoming = data;
+      if (hasSecrets && secretKey && (operation === 'create' || operation === 'update')) {
+        incoming = encryptSecretFields(data, secretFields, secretKey);
+      }
+
       switch (operation) {
         case 'create':
-          result = await service.create(ctx, data);
+          result = await service.create(ctx, incoming);
           break;
         case 'findById':
           result = await service.findById(ctx, data.id);
           break;
         case 'update':
-          result = await service.update(ctx, data.id, data);
+          result = await service.update(ctx, data.id, incoming);
           break;
         case 'delete':
           result = await service.delete(ctx, data.id);
@@ -424,6 +444,10 @@ export class LaForgeRuntime {
           break;
         default:
           throw new Error(`Unknown operation: ${operation}`);
+      }
+
+      if (hasSecrets && secretKey) {
+        result = decryptSecretFields(result, secretFields, secretKey);
       }
 
       console.log('Operation successful');

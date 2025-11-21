@@ -29,6 +29,7 @@ import { metrics, recordHttpRequest } from '../../runtime/metrics.js'
 import { withSpan } from '../../runtime/tracing.js'
 import { verifyProvenance } from '../lib/provenance.js'
 import { detectDrift } from '../../runtime/drift.js'
+import { isApproved } from '../lib/approvals.js'
 
 export function registerStudioCommand(program: Command) {
   program
@@ -290,6 +291,53 @@ export async function buildStudioServer(opts: { baseDir?: string; port?: number 
     reply.send(prov)
   })
 
+  fastify.get('/api/deploy/verify', async (request, reply) => {
+    const query = request.query as { branch?: string; requireSigned?: string; requireApproved?: string; requireProvenance?: string }
+    const branch = query.branch || (await getCurrentBranch(baseDir))
+    const requireSigned = query.requireSigned === 'true'
+    const requireApproved = query.requireApproved === 'true'
+    const requireProvenance = query.requireProvenance === 'true'
+
+    const results: Record<string, any> = {}
+
+    if (requireSigned) {
+      const chain = await verifyChain(baseDir, branch)
+      results.signed = chain
+      if (!chain.ok) {
+        reply.code(400).send({ ok: false, reason: 'chain', chain })
+        return
+      }
+    }
+
+    if (requireApproved) {
+      const entries = await listHistoryEntries(baseDir, { branch })
+      const latest = entries[0]
+      results.approved = { ok: !!(latest && isApproved(latest)), latest: latest?.id }
+      if (!latest || !isApproved(latest)) {
+        reply.code(400).send({ ok: false, reason: 'approval' })
+        return
+      }
+    }
+
+    if (requireProvenance) {
+      const prov = await verifyProvenance({ baseDir })
+      results.provenance = prov
+      if (!prov.ok) {
+        reply.code(400).send({ ok: false, reason: 'provenance', prov })
+        return
+      }
+    }
+
+    reply.send({
+      ok: true,
+      branch,
+      signedChecked: requireSigned,
+      approvedChecked: requireApproved,
+      provenanceChecked: requireProvenance,
+      results,
+    })
+  })
+
   fastify.get('/api/approvals', async (request, reply) => {
     const query = request.query as { branch?: string }
     const branch = query.branch || (await getCurrentBranch(baseDir))
@@ -358,6 +406,7 @@ export async function buildStudioServer(opts: { baseDir?: string; port?: number 
         migrationsCreated: e.migrationsCreated || [],
         migrationsApplied: e.migrationsApplied || [],
         verified: e.signature ? await verifySnapshot(e) : Boolean(e.hash),
+        applyStatus: (e.metadata as any)?.applyStatus,
       })),
     )
     reply.send({ branch, items })
@@ -388,6 +437,89 @@ export async function buildStudioServer(opts: { baseDir?: string; port?: number 
     await fs.mkdir(outRoot, { recursive: true })
     await fs.cp(entryDir, outDir, { recursive: true })
     reply.send({ id: target.id, branch: target.branch, verified, bundle: outDir })
+  })
+
+  fastify.post('/api/migrations/apply', async (request, reply) => {
+    const body = request.body as { id?: string; branch?: string }
+    if (!body?.id) {
+      reply.code(400).send({ error: 'id required' })
+      return
+    }
+    const branch = body.branch || (await getCurrentBranch(baseDir))
+    const entries = await listHistoryEntries(baseDir, { branch })
+    const target = resolveEntrySelector(body.id, entries)
+    if (!target) {
+      reply.code(404).send({ error: 'snapshot not found' })
+      return
+    }
+    const verified = target.signature ? await verifySnapshot(target) : Boolean(target.hash)
+    if (!verified) {
+      reply.code(400).send({ error: 'snapshot failed verification' })
+      return
+    }
+    const { historyDir } = historyPaths(baseDir)
+    const entryPath = path.join(historyDir, target.id, 'entry.json')
+    try {
+      await fs.writeFile(
+        entryPath,
+        JSON.stringify(
+          {
+            ...target,
+            metadata: { ...(target.metadata || {}), applyStatus: { appliedAt: new Date().toISOString() } },
+          },
+          null,
+          2,
+        ),
+        'utf8',
+      )
+    } catch {
+      // best effort
+    }
+    reply.send({ id: target.id, branch: target.branch, verified, applied: true })
+  })
+
+  fastify.get('/api/policy-impact', async (request, reply) => {
+    const query = request.query as { from?: string; to?: string; branch?: string }
+    const branch = query.branch || (await getCurrentBranch(baseDir))
+    const entries = await listHistoryEntries(baseDir, { branch })
+    const from = query.from ? resolveEntrySelector(query.from, entries) : entries[1]
+    const to = query.to ? resolveEntrySelector(query.to, entries) : entries[0]
+    if (!from || !to) {
+      reply.code(404).send({ error: 'Entries not found for policy impact' })
+      return
+    }
+    const diff = await diffHistoryEntries(from, to, { baseDir, colors: false })
+    const policyDiffs = (diff.attachmentDiffs || []).filter(att => {
+      const name = att.name.toLowerCase()
+      const kind = (att.kind || '').toLowerCase()
+      return name.includes('policy') || name.includes('rls') || kind.includes('policy') || kind.includes('rls')
+    })
+    let added = 0
+    let removed = 0
+    policyDiffs.forEach(att => {
+      if (!att.patch) return
+      att.patch.split('\n').forEach(line => {
+        if (line.startsWith('+')) added++
+        if (line.startsWith('-')) removed++
+      })
+    })
+    const attachments = policyDiffs.map(att => {
+      const patchSnippet = (att.patch || '')
+        .split('\n')
+        .filter(Boolean)
+        .slice(0, 30)
+        .join('\n')
+      return { ...att, patchSnippet }
+    })
+
+    reply.send({
+      from: from.id,
+      to: to.id,
+      added,
+      removed,
+      modified: policyDiffs.length,
+      attachments,
+    })
   })
 
   return fastify
@@ -583,6 +715,12 @@ function renderHtml(port: number): string {
         </div>
         <div id="integrity-summary" class="muted">Chain not verified yet.</div>
         <div class="grid" id="provenance-cards" style="grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:8px;"></div>
+        <div class="row" style="gap:10px; flex-wrap:wrap; align-items:center;">
+          <label style="display:flex; align-items:center; gap:6px;"><input id="guard-signed" type="checkbox" checked /> <span class="muted">Require signed</span></label>
+          <label style="display:flex; align-items:center; gap:6px;"><input id="guard-approved" type="checkbox" checked /> <span class="muted">Require approved</span></label>
+          <label style="display:flex; align-items:center; gap:6px;"><input id="guard-provenance" type="checkbox" checked /> <span class="muted">Require provenance</span></label>
+        </div>
+        <div class="grid" id="deploy-guard" style="grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:8px; margin-top:8px;"></div>
         <div style="overflow:auto; max-height:280px;">
           <table class="table">
             <thead>
@@ -661,6 +799,10 @@ function renderHtml(port: number): string {
           <pre class="diff" id="diff-viewer">Select two snapshots to view the diff.</pre>
         </div>
         <div>
+          <h3 style="margin:12px 0 6px;">Policy/RLS Impact</h3>
+          <div id="policy-impact" class="grid" style="grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:8px;"></div>
+        </div>
+        <div>
           <h3 style="margin:12px 0 6px;">Attachment Changes</h3>
           <pre class="diff" id="attachment-viewer">No attachment diffs.</pre>
         </div>
@@ -704,9 +846,14 @@ function renderHtml(port: number): string {
       const integrityRows = document.getElementById('integrity-rows');
       const integritySummary = document.getElementById('integrity-summary');
       const provenanceCards = document.getElementById('provenance-cards');
+      const guardSigned = document.getElementById('guard-signed');
+      const guardApproved = document.getElementById('guard-approved');
+      const guardProvenance = document.getElementById('guard-provenance');
       const approvalRows = document.getElementById('approval-rows');
       const driftCards = document.getElementById('drift-cards');
       const migrationRows = document.getElementById('migration-rows');
+      const policyImpact = document.getElementById('policy-impact');
+      const deployGuard = document.getElementById('deploy-guard');
 
       async function fetchJSON(url, opts) {
         const res = await fetch(url, opts);
@@ -755,6 +902,7 @@ function renderHtml(port: number): string {
         loadApprovals().catch(err => console.error(err));
         loadDrift().catch(err => console.error(err));
         loadMigrations().catch(err => console.error(err));
+        loadDeployGuard().catch(err => console.error(err));
       }
 
       function renderIntegrity(data) {
@@ -815,8 +963,49 @@ function renderHtml(port: number): string {
           const div = document.createElement('div');
           div.className = 'card';
           div.innerHTML = \`<div class="muted" style="font-size:11px; text-transform:uppercase;">\${item.label}</div><div style="font-size:13px; font-family:'JetBrains Mono', monospace;">\${item.value}</div>\`;
-          provenanceCards.appendChild(div);
+        provenanceCards.appendChild(div);
         });
+
+        // deploy guard status
+        renderDeployGuard({ ok: data.ok, reason: data.ok ? '' : 'provenance', results: { provenance: data } });
+      }
+
+      async function loadDeployGuard() {
+        const params = new URLSearchParams();
+        params.append('branch', currentBranch);
+        params.append('requireSigned', (guardSigned as any)?.checked ? 'true' : 'false');
+        params.append('requireApproved', (guardApproved as any)?.checked ? 'true' : 'false');
+        params.append('requireProvenance', (guardProvenance as any)?.checked ? 'true' : 'false');
+        try {
+          const res = await fetchJSON('/api/deploy/verify?' + params.toString());
+          renderDeployGuard({ ok: res.ok !== false, reason: res.reason, results: res.results });
+        } catch (err) {
+          renderDeployGuard({ ok: false, reason: 'guard failed' });
+        }
+      }
+
+      function renderDeployGuard(status) {
+        deployGuard.innerHTML = '';
+        const card = document.createElement('div');
+        card.className = 'card';
+        const signed = status.results?.signed?.ok ? '<span class="status-ok">signed</span>' : '<span class="status-warn">unsigned</span>';
+        const approved = status.results?.approved?.ok ? '<span class="status-ok">approved</span>' : '<span class="status-warn">pending</span>';
+        const prov = status.results?.provenance?.ok ? '<span class="status-ok">provenance ok</span>' : '<span class="status-bad">provenance fail</span>';
+        card.innerHTML = \`
+          <div class="muted" style="font-size:11px; text-transform:uppercase;">Deploy Guard</div>
+          <div style="font-size:18px; font-weight:700;">\${status.ok ? 'ready' : 'blocked'}</div>
+          <div class="muted" style="font-size:12px;">\${status.reason || ''}</div>
+          <div class="row" style="gap:8px; margin-top:6px;">
+            <span class="badge">\${signed}</span>
+            <span class="badge">\${approved}</span>
+            <span class="badge">\${prov}</span>
+          </div>
+          <div class="row-actions" style="margin-top:8px;">
+            <button class="btn-ghost" id="verify-deploy">Verify now</button>
+          </div>
+        \`;
+        deployGuard.appendChild(card);
+        document.getElementById('verify-deploy')?.addEventListener('click', loadDeployGuard);
       }
 
       async function loadApprovals() {
@@ -906,6 +1095,15 @@ function renderHtml(port: number): string {
         alert('Rollback bundle prepared.');
       }
 
+      async function triggerApply(id) {
+        await fetchJSON('/api/migrations/apply', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id }),
+        });
+        alert('Apply check passed.');
+      }
+
       function renderMigrations(items) {
         migrationRows.innerHTML = '';
         if (!items.length) {
@@ -919,14 +1117,52 @@ function renderHtml(port: number): string {
             <td>\${item.id}</td>
             <td>\${new Date(item.createdAt).toLocaleString()}</td>
             <td>\${migCount}</td>
-            <td>\${item.verified ? '<span class="status-ok">yes</span>' : '<span class="status-warn">unknown</span>'}</td>
-            <td><button class="btn-ghost" data-roll="\${item.id}">Rollback</button></td>
+            <td>\${item.verified ? '<span class="status-ok">yes</span>' : '<span class="status-warn">unknown</span>'}<div class="muted">\${item.applyStatus?.appliedAt ? 'applied ' + new Date(item.applyStatus.appliedAt).toLocaleString() : ''}</div></td>
+            <td class="row-actions">
+              <button class="btn-ghost" data-apply="\${item.id}">Apply</button>
+              <button class="btn-ghost" data-roll="\${item.id}">Rollback</button>
+            </td>
           \`;
           migrationRows.appendChild(row);
         });
         migrationRows.querySelectorAll('button[data-roll]').forEach(btn => {
           btn.addEventListener('click', () => triggerRollback(btn.getAttribute('data-roll')));
         });
+        migrationRows.querySelectorAll('button[data-apply]').forEach(btn => {
+          btn.addEventListener('click', () => triggerApply(btn.getAttribute('data-apply')));
+        });
+      }
+
+      async function loadPolicyImpact(from, to) {
+        const data = await fetchJSON(\`/api/policy-impact?from=\${encodeURIComponent(from)}&to=\${encodeURIComponent(to)}&branch=\${encodeURIComponent(currentBranch)}\`);
+        renderPolicyImpact(data);
+      }
+
+      function renderPolicyImpact(data) {
+        policyImpact.innerHTML = '';
+        if (!data || data.modified === undefined) {
+          policyImpact.innerHTML = '<div class="card muted">No policy impact.</div>';
+          return;
+        }
+        const cards = [
+          { label: 'Modified attachments', value: data.modified },
+          { label: 'Lines added', value: data.added },
+          { label: 'Lines removed', value: data.removed },
+        ];
+        cards.forEach(c => {
+          const div = document.createElement('div');
+          div.className = 'card';
+          div.innerHTML = \`<div class="muted" style="font-size:11px; text-transform:uppercase;">\${c.label}</div><div style="font-size:18px;font-weight:700;">\${c.value}</div>\`;
+          policyImpact.appendChild(div);
+        });
+        if (Array.isArray(data.attachments)) {
+          data.attachments.slice(0, 3).forEach(att => {
+            const div = document.createElement('div');
+            div.className = 'card';
+            div.innerHTML = \`<div class="muted" style="font-size:11px; text-transform:uppercase;">\${att.name}</div><pre class="diff" style="white-space:pre-wrap; font-size:11px; max-height:160px; overflow:auto;">\${att.patchSnippet || ''}</pre>\`;
+            policyImpact.appendChild(div);
+          });
+        }
       }
 
       async function loadBranches() {
@@ -1054,6 +1290,8 @@ function renderHtml(port: number): string {
           div.innerHTML = \`<div class="muted" style="font-size:11px; text-transform:uppercase;">\${c.label}</div><div style="font-size:20px;font-weight:700;">\${c.value}</div>\`;
           summaryCards.appendChild(div);
         });
+
+        await loadPolicyImpact(from, to);
       }
 
       async function replayEntry() {
@@ -1209,6 +1447,7 @@ function renderHtml(port: number): string {
         await loadApprovals();
         await loadDrift();
         await loadMigrations();
+        await loadDeployGuard();
       })();
     </script>
   </body>

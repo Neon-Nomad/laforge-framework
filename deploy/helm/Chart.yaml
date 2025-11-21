@@ -1,0 +1,6 @@
+apiVersion: v2
+name: laforge
+description: Starter Helm chart for LaForge runtime + Studio with blue/green labeling hooks
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

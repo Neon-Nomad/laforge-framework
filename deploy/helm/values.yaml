@@ -1,0 +1,36 @@
+# Global knobs
+imageRegistry: ghcr.io/laforge
+slot: blue # blue | green
+
+runtime:
+  image: "runtime:latest"
+  replicas: 2
+  port: 3000
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 1
+      memory: 512Mi
+  latencyBudgetMs: 500
+  errorBudget: 0.02
+  trafficSteps: [10, 50, 100]
+
+studio:
+  image: "studio:latest"
+  replicas: 1
+  port: 4173
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+ingress:
+  enabled: true
+  className: nginx
+  host: laforge.example.com
+  tlsSecret: laforge-tls

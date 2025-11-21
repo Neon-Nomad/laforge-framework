@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "laforge.fullname" . }}-studio
+spec:
+  selector:
+    app.kubernetes.io/name: laforge-studio
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

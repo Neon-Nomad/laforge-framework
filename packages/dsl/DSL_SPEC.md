@@ -25,6 +25,10 @@ This document reflects exactly how the shipped compiler parses, validates, and g
 - `tenant` marks a tenant-scoped column. When multi-tenant mode is on (default), RLS adds a tenant equality check automatically.
 - `unique` marks a unique column (SQL generation adds `UNIQUE`).
 - `default <value>` captures raw SQL defaults: string literals `"..."`/`'...'` or bare identifiers/functions (e.g., `now()`, `uuid_generate_v4()`).
+- `pii` marks fields as sensitive for redaction/masking in runtime responses.
+- `secret` marks highly sensitive fields; treated the same as `pii` for masking.
+- `residency(<region>)` captures an optional data residency tag (e.g., `residency(us-east)`).
+- `secret` fields are encrypted at runtime when `LAFORGE_SECRET_KEY` is set; residency tags are enforced on create/update when `DATA_RESIDENCY`/`LAFORGE_RESIDENCY` is set.
 
 ## 5) Relations and cardinality
 - **belongsTo(Target)**: creates a relation entry and, if missing, an FK column named `<fieldName>Id` of type `uuid`, `optional: false`, `onDelete: cascade`.

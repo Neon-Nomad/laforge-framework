@@ -10,9 +10,9 @@ Status: baseline compiler/Studio are stable for teams; this document lists the g
 - Execution plan: see docs/IDENTITY_ACCESS_PLAN.md.
 
 ## 2) Audit, Approvals, and Signing
-- ✅ Append-only audit log for schema changes, migrations, timeline actions, RBAC events, and policy edits (DB table + NDJSON sink, immutability triggers); surfaced in Studio Audit Trail and CLI.
-- ✅ Cryptographically signed snapshots with hash+prevHash+Ed25519 signature/publicKey; chain verification in CLI (`laforge verify chain`) and Studio Integrity panel; provenance export.
-- ✅ Approval workflow v1 via CLI (approve/reject/annotate) with optional signed approvals; deployment guard can require signed+approved snapshot.
+- [done] Append-only audit log for schema changes, migrations, timeline actions, RBAC events, and policy edits (DB table + NDJSON sink, immutability triggers); surfaced in Studio Audit Trail and CLI.
+- [done] Cryptographically signed snapshots with hash+prevHash+Ed25519 signature/publicKey; chain verification in CLI (`laforge verify chain`) and Studio Integrity panel; provenance export.
+- [done] Approval workflow v1 via CLI (approve/reject/annotate) with optional signed approvals; deployment guard can require signed+approved snapshot.
 
 ### What we will build
 - **Audit log** (shipped): domain+Studio events (migrations applied/repaired, policies edited, DSL changes, approvals, snapshot restore) persisted append-only; emits to Postgres table or file sink; includes actor (user/role/claims), tenant, request id, timestamp, hash of artifact; visible via Studio Audit Trail and `laforge audit` commands.
@@ -20,17 +20,17 @@ Status: baseline compiler/Studio are stable for teams; this document lists the g
 - **Approvals** (shipped v1): CLI approvals/annotations bound to snapshots with audit entries and optional signatures; deploy guard flag for signed+approved state. Studio approvals UI and policy-diff-driven “approval required” markers are next.
 
 ### Phased plan
-1) **Audit plumbing** ✅
+1) **Audit plumbing** [done]
    - Audit writer in runtime/CLI/Studio; append-only table + file sink with immutability triggers; PII-minimized payloads.
    - Tests: audit events for migrations, policy edits, branch ops; append-only enforced.
-2) **Snapshot signing** ✅
+2) **Snapshot signing** [done]
    - Hash + signature stored on snapshots; chain verification in CLI/Studio; provenance export.
    - Next: extend to migration SQL and policy/RLS bundles; expose key ids/rotation.
-3) **Approvals workflow** ✅ (CLI v1)
-   - CLI approve/reject/annotate with audit trail and optional signatures; deploy guard flag for signed+approved state.
-   - Next: Studio approvals UI, configurable quorum, and policy-diff-driven “approval required” markers.
-4) **Runtime hooks + hardening** ▶
-   - Production mode rejection of unsigned/unauthorized artifacts; optional Merkle-chain for audit entries; periodic checksum verification job; webhook sink for SIEM.
+3) **Approvals workflow** [in flight] (CLI v1 + Studio Integrity panel)
+   - CLI approve/reject/annotate with audit trail and optional signatures; deploy guard flag for signed+approved/provenance-required state; Studio approvals UI shows queue, decisions, and drift/migration status.
+   - Next: configurable quorum, policy-diff-driven “approval required” markers, and auto-block on unapproved diffs.
+4) **Runtime hooks + hardening** [next]
+   - Production mode rejection of unsigned/unauthorized artifacts; optional Merkle-chain for audit entries; periodic checksum verification job; webhook sink for SIEM/SOAR.
 
 ### Deliverables per milestone
 - Code + tests + docs (CLI flags, Studio screenshots, API contract for audit sink).
@@ -38,21 +38,22 @@ Status: baseline compiler/Studio are stable for teams; this document lists the g
 - Default-off flags for signing enforcement and approval gating; enable in staged rollouts.
 
 ## 3) Observability & Ops
-- ✅ Prometheus `/metrics` for runtime + Studio with HTTP rate/latency, model ops, RBAC/ABAC rejects, compile and migration durations; health (`/health`) and readiness (`/ready`) probes shipped.
-- ✅ Optional OTEL spans around CLI compile/generate/migrate, runtime compile/execute, and generated services (create/read/update/delete) via `traceSpan` hook.
-- ✅ Sample Grafana dashboard: `docs/grafana-dashboard-laforge.json` (HTTP rate/latency, migration duration, reject rate, compile/generate duration, model ops success/failure).
+- [done] Prometheus `/metrics` for runtime + Studio with HTTP rate/latency, model ops, RBAC/ABAC rejects, compile and migration durations; health (`/health`) and readiness (`/ready`) probes shipped.
+- [done] Optional OTEL spans around CLI compile/generate/migrate, runtime compile/execute, and generated services (create/read/update/delete) via `traceSpan` hook.
+- [done] Sample Grafana dashboard: `docs/grafana-dashboard-laforge.json` (HTTP rate/latency, migration duration, reject rate, compile/generate duration, model ops success/failure).
 - Next: OTEL exporter config/snippets, log shipping guidance, and p95 budget tests for migrations.
 
 ## 4) Deployment Hardening
-- HA guidance and artifacts: container images, Helm charts, K8s manifests.
-- Backup/restore playbooks; PITR guidance; DR runbooks.
-- Blue/green and canary migrations; staged rollouts with automatic pause on errors.
+- [started] HA artifacts: starter Helm chart + K8s manifests (runtime, Studio, ingress) with blue/green labels and probes.
+- [started] Blue/green and canary migrations; staged rollouts with automatic pause on errors via `laforge deploy --strategy bluegreen`.
+- [added] Backup/DR playbook + K8s backup CronJob; PITR guidance and restore drills.
 
 ## 5) Data Protection & Compliance
 - DSL annotations for PII/PHI; field-level encryption/tokenization options.
 - Data residency flags; schema partitioning per region/tenant.
 - Secrets management integration (AWS/GCP/Azure/KMS) for generated services and Studio.
 - Privacy/compliance audit hooks (SOC2/ISO playbook alignment).
+  - [started] DSL `pii`/`secret`/`residency(<region>)` captured; runtime redaction auto-uses compiled PII/secret fields; residency enforcement blocks create/update on mismatched runtime residency; secret fields encrypted with `LAFORGE_SECRET_KEY`.
 
 ## 6) Supply Chain Security
 - SBOMs (CycloneDX/SPDX) for CLI/runtime and generated artifacts; attach to every release + provenance export. (`npm run sbom`, `laforge sign sbom`, `laforge verify sbom --require-signature`)
@@ -82,14 +83,15 @@ Status: baseline compiler/Studio are stable for teams; this document lists the g
 - Optional signing: `npm run sign:sbom` / `npm run verify:sbom:sig` when `.laforge/keys/ed25519_private.pem` is present; wire into release CI when keys are available.
 
 ## 7) Runtime Controls
-- ✔ Rate limiting and WAF hook points for generated routes (token bucket + regex shield; 429/403 responses) with metrics surfaced to Studio.
-- ✔ API auth story for generated services (JWT/OIDC) consistent with DSL policies; tenant header guard; expired token rejection.
-- ✔ Safe defaults for CORS/headers; dependency vulnerability scanning in CI (`npm run ci:security`); optional PII redaction middleware.
+- [done] Rate limiting and WAF hook points for generated routes (token bucket + regex shield; 429/403 responses) with metrics surfaced to Studio.
+- [done] API auth story for generated services (JWT/OIDC) consistent with DSL policies; tenant header guard; expired token rejection.
+- [done] Safe defaults for CORS/headers; dependency vulnerability scanning in CI (`npm run ci:security`); optional PII redaction middleware.
 
 ## 8) Operator UX
-- Admin console surfaces: approvals queue, drift alerts, migration status, audit feed.
-- Roll-forward/rollback commands with safety checks. (`laforge rollback`, new Studio metrics endpoint for Security Health)
-- Policy/RLS diff previews with impact analysis before apply.
+- [done] Admin console surfaces approvals queue, drift alerts, migration status, audit feed; Integrity panel shows signed/approved/provenance status with “verify now” actions.
+- [done] Roll-forward/rollback commands with safety checks (`laforge rollback` + Studio apply/rollback actions) and deployment guard toggles for signed/approved/provenance-required.
+- [done] Policy/RLS diff previews with impact analysis before apply (policy-impact API + diff snippets in Studio).
+- Next: configurable approval quorum, SLO widgets fed by Prometheus counters, and richer drift auto-heal actions.
 
 ## Execution Approach
 1. Ship identity + signing + audit logging first (foundation for approvals).

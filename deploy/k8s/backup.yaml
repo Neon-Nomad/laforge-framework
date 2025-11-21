@@ -1,0 +1,55 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: laforge-pg-backup
+spec:
+  schedule: "0 3 * * *" # daily at 03:00
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: pg-backup
+              image: postgres:16
+              env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: laforge-db
+                      key: password
+                - name: PGUSER
+                  valueFrom:
+                    secretKeyRef:
+                      name: laforge-db
+                      key: user
+                - name: PGHOST
+                  valueFrom:
+                    secretKeyRef:
+                      name: laforge-db
+                      key: host
+                - name: PGPORT
+                  valueFrom:
+                    secretKeyRef:
+                      name: laforge-db
+                      key: port
+                - name: PGDATABASE
+                  valueFrom:
+                    secretKeyRef:
+                      name: laforge-db
+                      key: database
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  ts=$(date -u +%Y%m%dT%H%M%SZ)
+                  pg_dump --format=custom --file=/backups/${PGDATABASE}-${ts}.dump --compress=9 "${PGDATABASE}"
+              volumeMounts:
+                - name: backup-target
+                  mountPath: /backups
+          volumes:
+            - name: backup-target
+              persistentVolumeClaim:
+                claimName: laforge-backup-pvc

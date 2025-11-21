@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "laforge.fullname" . }}-runtime
+  labels:
+    app.kubernetes.io/name: laforge-runtime
+    laforge.dev/slot: {{ .Values.slot | default "blue" }}
+spec:
+  replicas: {{ .Values.runtime.replicas | default 2 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: laforge-runtime
+      laforge.dev/slot: {{ .Values.slot | default "blue" }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: laforge-runtime
+        laforge.dev/slot: {{ .Values.slot | default "blue" }}
+    spec:
+      containers:
+        - name: runtime
+          image: "{{ .Values.imageRegistry }}/{{ .Values.runtime.image }}"
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: LAFORGE_SLOT
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['laforge.dev/slot']
+          ports:
+            - name: http
+              containerPort: {{ .Values.runtime.port | default 3000 }}
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: {{ .Values.runtime.resources.requests.cpu }}
+              memory: {{ .Values.runtime.resources.requests.memory }}
+            limits:
+              cpu: {{ .Values.runtime.resources.limits.cpu }}
+              memory: {{ .Values.runtime.resources.limits.memory }}

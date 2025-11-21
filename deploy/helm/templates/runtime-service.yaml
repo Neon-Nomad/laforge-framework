@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "laforge.fullname" . }}-runtime
+spec:
+  selector:
+    app.kubernetes.io/name: laforge-runtime
+    laforge.dev/slot: {{ .Values.slot | default "blue" }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

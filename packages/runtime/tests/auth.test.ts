@@ -68,4 +68,32 @@ describe('auth pre-handler (mock provider)', () => {
     expect(reply.statusCode).toBe(401);
     expect((request as any).user).toBeUndefined();
   });
+
+  it('rejects an expired token', { timeout: 20000 }, async () => {
+    const { token } = await issueMockToken(baseConfig, { sub: 'expired', tenantId: 'tenant-1', expiresInSeconds: -60 });
+    const request = {
+      headers: { authorization: `Bearer ${token}` },
+    } as unknown as FastifyRequest;
+    const reply = createReplyStub();
+    const preHandler = createAuthPreHandler(baseConfig);
+
+    await preHandler(request, reply);
+
+    expect(reply.statusCode).toBe(401);
+    expect(reply.payload).toMatchObject({ error: 'Unauthorized' });
+  });
+
+  it('enforces tenant header mismatch with 403', { timeout: 20000 }, async () => {
+    const { token } = await issueMockToken(baseConfig, { sub: 'user-tenant', tenantId: 'tenant-a' });
+    const request = {
+      headers: { authorization: `Bearer ${token}`, 'x-tenant-id': 'tenant-b' },
+    } as unknown as FastifyRequest;
+    const reply = createReplyStub();
+    const preHandler = createAuthPreHandler(baseConfig);
+
+    await preHandler(request, reply);
+
+    expect(reply.statusCode).toBe(403);
+    expect(reply.payload).toMatchObject({ error: 'Tenant mismatch' });
+  });
 });

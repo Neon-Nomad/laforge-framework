@@ -27,6 +27,8 @@
     "verify:sbom:sig": "node scripts/verify-sbom-signature.cjs",
     "ci:supplychain": "npm run sbom && npm run repro && npm run verify:sbom",
     "ci:supplychain:strict": "npm run sbom && npm run repro && npm run verify:sbom && npm run verify:sbom:sig",
+    "provenance": "tsx packages/cli/scripts/provenance.ts",
+    "ci:security": "npm audit --audit-level=high",
     "build:auto-migrate": "tsc -p packages/auto-migrate/tsconfig.json",
     "test:auto-migrate": "vitest run --config packages/auto-migrate/vitest.config.ts",
     "dev": "tsx watch packages/cli/index.ts",

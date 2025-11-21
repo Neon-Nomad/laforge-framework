@@ -82,13 +82,13 @@ Status: baseline compiler/Studio are stable for teams; this document lists the g
 - Optional signing: `npm run sign:sbom` / `npm run verify:sbom:sig` when `.laforge/keys/ed25519_private.pem` is present; wire into release CI when keys are available.
 
 ## 7) Runtime Controls
-- Rate limiting and WAF hook points for generated routes.
-- API auth story for generated services (JWT/OIDC) consistent with DSL policies.
-- Safe defaults for CORS/headers; dependency vulnerability scanning in CI.
+- ✔ Rate limiting and WAF hook points for generated routes (token bucket + regex shield; 429/403 responses) with metrics surfaced to Studio.
+- ✔ API auth story for generated services (JWT/OIDC) consistent with DSL policies; tenant header guard; expired token rejection.
+- ✔ Safe defaults for CORS/headers; dependency vulnerability scanning in CI (`npm run ci:security`); optional PII redaction middleware.
 
 ## 8) Operator UX
 - Admin console surfaces: approvals queue, drift alerts, migration status, audit feed.
-- Roll-forward/rollback commands with safety checks.
+- Roll-forward/rollback commands with safety checks. (`laforge rollback`, new Studio metrics endpoint for Security Health)
 - Policy/RLS diff previews with impact analysis before apply.
 
 ## Execution Approach

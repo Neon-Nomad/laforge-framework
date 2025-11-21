@@ -2,6 +2,7 @@ import { Command } from 'commander';
 import { getCurrentBranch, listHistoryEntries } from '../lib/history.js';
 import { verifyChain } from '../lib/signing.js';
 import { isApproved } from '../lib/approvals.js';
+import { verifyProvenance } from '../lib/provenance.js';
 
 export function registerDeployCommand(program: Command) {
   program
@@ -10,6 +11,7 @@ export function registerDeployCommand(program: Command) {
     .option('--branch <branch>', 'Branch to validate')
     .option('--require-signed', 'Require signed chain', false)
     .option('--require-approved', 'Require latest snapshot approval', false)
+    .option('--require-provenance', 'Require compiled.json hash matches provenance', false)
     .action(async opts => {
       const baseDir = process.cwd();
       const branch = opts.branch || (await getCurrentBranch(baseDir));
@@ -32,12 +34,22 @@ export function registerDeployCommand(program: Command) {
         }
       }
 
+      if (opts.requireProvenance) {
+        const prov = await verifyProvenance({ baseDir });
+        if (!prov.ok) {
+          console.error('Provenance verification failed', prov);
+          process.exitCode = 1;
+          return;
+        }
+      }
+
       console.log(
         JSON.stringify(
           {
             branch,
             chainChecked: !!opts.requireSigned,
             approvalsChecked: !!opts.requireApproved,
+            provenanceChecked: !!opts.requireProvenance,
             ready: true,
           },
           null,

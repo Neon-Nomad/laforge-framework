@@ -15,7 +15,9 @@ import {
   cloneEntryToBranch,
   resolveEntrySelector,
   loadEntryModels,
+  historyPaths,
 } from '../lib/history.js'
+import { recordApproval } from '../lib/approvals.js'
 import { listAuditEntries } from '../lib/auditStore.js'
 import { verifyChain, verifySnapshot } from '../lib/signing.js'
 import { generateMigrations } from '../../compiler/diffing/migrationGenerator.js'
@@ -25,6 +27,8 @@ import type { SchemaOperation } from '../../compiler/diffing/schemaDiff.js'
 import { diffLines } from 'diff'
 import { metrics, recordHttpRequest } from '../../runtime/metrics.js'
 import { withSpan } from '../../runtime/tracing.js'
+import { verifyProvenance } from '../lib/provenance.js'
+import { detectDrift } from '../../runtime/drift.js'
 
 export function registerStudioCommand(program: Command) {
   program
@@ -65,6 +69,16 @@ export async function buildStudioServer(opts: { baseDir?: string; port?: number 
 
   fastify.get('/metrics', async (_req, reply) => {
     reply.header('Content-Type', 'text/plain; version=0.0.4').send(metrics.exportPrometheus())
+  })
+
+  fastify.get('/api/studio/metrics', async (_req, reply) => {
+    const focus = [
+      'laforge_waf_blocks_total',
+      'laforge_rate_limit_blocks_total',
+      'laforge_policy_rejects_total',
+      'laforge_policy_chaos_failures_total',
+    ]
+    reply.send(metrics.snapshot(focus))
   })
 
   fastify.get('/', async (_, reply) => {
@@ -271,6 +285,111 @@ export async function buildStudioServer(opts: { baseDir?: string; port?: number 
     reply.send({ branch, chain, snapshots })
   })
 
+  fastify.get('/api/provenance', async (_request, reply) => {
+    const prov = await verifyProvenance({ baseDir })
+    reply.send(prov)
+  })
+
+  fastify.get('/api/approvals', async (request, reply) => {
+    const query = request.query as { branch?: string }
+    const branch = query.branch || (await getCurrentBranch(baseDir))
+    const entries = await listHistoryEntries(baseDir, { branch })
+    const items = entries.map(e => ({
+      id: e.id,
+      createdAt: e.createdAt,
+      branch: e.branch,
+      hash: e.hash,
+      approvals: e.approvals || [],
+      approved: !!(e.approvals && e.approvals.length && e.approvals[e.approvals.length - 1].decision === 'approved'),
+    }))
+    reply.send({ branch, items })
+  })
+
+  fastify.post('/api/approvals/decision', async (request, reply) => {
+    const body = request.body as { id?: string; decision?: 'approved' | 'rejected' | 'annotated'; reason?: string; actor?: string; sign?: boolean }
+    if (!body?.id || !body?.decision) {
+      reply.code(400).send({ error: 'id and decision required' })
+      return
+    }
+    try {
+      const approval = await recordApproval(body.id, body.decision, {
+        baseDir,
+        reason: body.reason,
+        actor: body.actor,
+        sign: !!body.sign,
+      })
+      reply.send({ approval })
+    } catch (err: any) {
+      reply.code(400).send({ error: err?.message || 'approval failed' })
+    }
+  })
+
+  fastify.get('/api/drift', async (_request, reply) => {
+    const compiledPath = path.join(baseDir, 'generated', 'compiled.json')
+    const dbPath = path.join(baseDir, '.laforge', 'db.sqlite')
+    try {
+      await fs.access(compiledPath)
+    } catch {
+      reply.send({ enabled: false, reason: 'compiled.json not found', compiledPath })
+      return
+    }
+    try {
+      await fs.access(dbPath)
+    } catch {
+      reply.send({ enabled: false, reason: 'database not found', dbPath })
+      return
+    }
+    const compiled = JSON.parse(await fs.readFile(compiledPath, 'utf8')) as CompilationOutput
+    const db = new DatabaseConnection(dbPath)
+    const drift = await detectDrift(db, compiled)
+    reply.send({ enabled: true, dbPath, compiledPath, drift })
+  })
+
+  fastify.get('/api/migrations', async (request, reply) => {
+    const query = request.query as { branch?: string }
+    const branch = query.branch || (await getCurrentBranch(baseDir))
+    const entries = await listHistoryEntries(baseDir, { branch })
+    const items = await Promise.all(
+      entries.map(async e => ({
+        id: e.id,
+        branch: e.branch,
+        kind: e.kind,
+        createdAt: e.createdAt,
+        migrationsCreated: e.migrationsCreated || [],
+        migrationsApplied: e.migrationsApplied || [],
+        verified: e.signature ? await verifySnapshot(e) : Boolean(e.hash),
+      })),
+    )
+    reply.send({ branch, items })
+  })
+
+  fastify.post('/api/migrations/rollback', async (request, reply) => {
+    const body = request.body as { id?: string; branch?: string; out?: string }
+    if (!body?.id) {
+      reply.code(400).send({ error: 'id required' })
+      return
+    }
+    const branch = body.branch || (await getCurrentBranch(baseDir))
+    const entries = await listHistoryEntries(baseDir, { branch })
+    const target = resolveEntrySelector(body.id, entries)
+    if (!target) {
+      reply.code(404).send({ error: 'snapshot not found' })
+      return
+    }
+    const verified = target.signature ? await verifySnapshot(target) : Boolean(target.hash)
+    if (!verified) {
+      reply.code(400).send({ error: 'snapshot failed verification' })
+      return
+    }
+    const { historyDir } = historyPaths(baseDir)
+    const entryDir = path.join(historyDir, target.id)
+    const outRoot = path.isAbsolute(body.out || '') ? (body.out as string) : path.join(baseDir, body.out || '.laforge/rollback')
+    const outDir = path.join(outRoot, target.id)
+    await fs.mkdir(outRoot, { recursive: true })
+    await fs.cp(entryDir, outDir, { recursive: true })
+    reply.send({ id: target.id, branch: target.branch, verified, bundle: outDir })
+  })
+
   return fastify
 }
 
@@ -463,6 +582,7 @@ function renderHtml(port: number): string {
           <button class="btn-ghost" id="refresh-integrity">Refresh</button>
         </div>
         <div id="integrity-summary" class="muted">Chain not verified yet.</div>
+        <div class="grid" id="provenance-cards" style="grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:8px;"></div>
         <div style="overflow:auto; max-height:280px;">
           <table class="table">
             <thead>
@@ -475,6 +595,46 @@ function renderHtml(port: number): string {
             </thead>
             <tbody id="integrity-rows">
               <tr><td colspan="4" class="muted">No integrity data.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel stack">
+        <div class="row" style="justify-content:space-between; align-items:center;">
+          <h2 style="margin:0;">Approvals & Drift</h2>
+          <button class="btn-ghost" id="refresh-ops">Refresh</button>
+        </div>
+        <div class="grid" id="drift-cards" style="grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap:8px;"></div>
+        <div style="overflow:auto; max-height:240px;">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Snapshot</th>
+                <th>Branch</th>
+                <th>Status</th>
+                <th>Latest decision</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="approval-rows">
+              <tr><td colspan="5" class="muted">No snapshots yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div style="overflow:auto; max-height:200px; margin-top:10px;">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Snapshot</th>
+                <th>Created</th>
+                <th>Migrations</th>
+                <th>Verified</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="migration-rows">
+              <tr><td colspan="5" class="muted">No migration entries.</td></tr>
             </tbody>
           </table>
         </div>
@@ -543,6 +703,10 @@ function renderHtml(port: number): string {
       const blameBtn = document.getElementById('show-blame');
       const integrityRows = document.getElementById('integrity-rows');
       const integritySummary = document.getElementById('integrity-summary');
+      const provenanceCards = document.getElementById('provenance-cards');
+      const approvalRows = document.getElementById('approval-rows');
+      const driftCards = document.getElementById('drift-cards');
+      const migrationRows = document.getElementById('migration-rows');
 
       async function fetchJSON(url, opts) {
         const res = await fetch(url, opts);
@@ -587,6 +751,10 @@ function renderHtml(port: number): string {
       async function loadIntegrity() {
         const data = await fetchJSON('/api/integrity?branch=' + encodeURIComponent(currentBranch));
         renderIntegrity(data);
+        loadProvenance().catch(err => console.error(err));
+        loadApprovals().catch(err => console.error(err));
+        loadDrift().catch(err => console.error(err));
+        loadMigrations().catch(err => console.error(err));
       }
 
       function renderIntegrity(data) {
@@ -621,6 +789,143 @@ function renderHtml(port: number): string {
             (approvals ? approvals + ' entries' : 'none') +
             '</td>';
           integrityRows.appendChild(row);
+        });
+      }
+
+      async function loadProvenance() {
+        const data = await fetchJSON('/api/provenance');
+        renderProvenance(data);
+      }
+
+      function renderProvenance(data) {
+        provenanceCards.innerHTML = '';
+        if (!data || data.ok === undefined) {
+          provenanceCards.innerHTML = '<div class="card muted">Provenance not available.</div>';
+          return;
+        }
+        const status = data.ok ? '<span class="status-ok">verified</span>' : '<span class="status-bad">tampered</span>';
+        const items = [
+          { label: 'Status', value: status },
+          { label: 'Expected hash', value: data.expectedHash || 'n/a' },
+          { label: 'Actual hash', value: data.actualHash || 'n/a' },
+          { label: 'Compiled path', value: data.compiledPath || 'generated/compiled.json' },
+          { label: 'Provenance path', value: data.provenancePath || '.laforge/provenance.json' },
+        ];
+        items.forEach(item => {
+          const div = document.createElement('div');
+          div.className = 'card';
+          div.innerHTML = \`<div class="muted" style="font-size:11px; text-transform:uppercase;">\${item.label}</div><div style="font-size:13px; font-family:'JetBrains Mono', monospace;">\${item.value}</div>\`;
+          provenanceCards.appendChild(div);
+        });
+      }
+
+      async function loadApprovals() {
+        const data = await fetchJSON('/api/approvals?branch=' + encodeURIComponent(currentBranch));
+        renderApprovals(data.items || []);
+      }
+
+      async function submitDecision(id, decision) {
+        const reason = prompt(\`Reason for \${decision}?\`) || '';
+        await fetchJSON('/api/approvals/decision', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, decision, reason }),
+        });
+        await loadApprovals();
+        await loadIntegrity();
+      }
+
+      function renderApprovals(items) {
+        approvalRows.innerHTML = '';
+        if (!items.length) {
+          approvalRows.innerHTML = '<tr><td colspan="5" class="muted">No snapshots found.</td></tr>';
+          return;
+        }
+        items.forEach(item => {
+          const latest = (item.approvals || [])[item.approvals.length - 1];
+          const status = item.approved ? '<span class="status-ok">approved</span>' : '<span class="status-warn">pending</span>';
+          const row = document.createElement('tr');
+          const decisionText = latest ? \`\${latest.decision} @ \${new Date(latest.timestamp).toLocaleString()}\` : 'none';
+          const actions =
+            item.approved
+              ? '<span class="muted">--</span>'
+              : \`<button class="btn-ghost" data-id="\${item.id}" data-action="approved">Approve</button><button class="btn-ghost" data-id="\${item.id}" data-action="rejected">Reject</button>\`;
+          row.innerHTML = \`
+            <td>\${item.id}</td>
+            <td>\${item.branch || ''}</td>
+            <td>\${status}</td>
+            <td>\${decisionText}</td>
+            <td class="row-actions">\${actions}</td>
+          \`;
+          approvalRows.appendChild(row);
+        });
+        approvalRows.querySelectorAll('button[data-action]').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const id = btn.getAttribute('data-id');
+            const action = btn.getAttribute('data-action');
+            if (id && action) {
+              submitDecision(id, action);
+            }
+          });
+        });
+      }
+
+      async function loadDrift() {
+        const data = await fetchJSON('/api/drift');
+        renderDrift(data);
+      }
+
+      function renderDrift(data) {
+        driftCards.innerHTML = '';
+        if (!data || data.enabled === false) {
+          driftCards.innerHTML = '<div class="card muted">Drift check unavailable (' + (data?.reason || 'not configured') + ')</div>';
+          return;
+        }
+        const missing = data.drift?.filter(d => (d.missingColumns || []).length || (d.extraColumns || []).length) || [];
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.innerHTML = \`
+          <div class="muted" style="font-size:11px; text-transform:uppercase;">Drift</div>
+          <div style="font-size:18px; font-weight:700;">\${missing.length ? missing.length + ' tables with drift' : 'no drift detected'}</div>
+          <div class="muted" style="font-size:12px;">DB: \${data.dbPath}</div>
+        \`;
+        driftCards.appendChild(card);
+      }
+
+      async function loadMigrations() {
+        const data = await fetchJSON('/api/migrations?branch=' + encodeURIComponent(currentBranch));
+        renderMigrations(data.items || []);
+      }
+
+      async function triggerRollback(id) {
+        await fetchJSON('/api/migrations/rollback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id }),
+        });
+        alert('Rollback bundle prepared.');
+      }
+
+      function renderMigrations(items) {
+        migrationRows.innerHTML = '';
+        if (!items.length) {
+          migrationRows.innerHTML = '<tr><td colspan="5" class="muted">No migration entries.</td></tr>';
+          return;
+        }
+        items.forEach(item => {
+          const row = document.createElement('tr');
+          const migCount = (item.migrationsCreated || []).length || (item.migrationsApplied || []).length;
+          row.innerHTML = \`
+            <td>\${item.id}</td>
+            <td>\${new Date(item.createdAt).toLocaleString()}</td>
+            <td>\${migCount}</td>
+            <td>\${item.verified ? '<span class="status-ok">yes</span>' : '<span class="status-warn">unknown</span>'}</td>
+            <td><button class="btn-ghost" data-roll="\${item.id}">Rollback</button></td>
+          \`;
+          migrationRows.appendChild(row);
+        });
+        migrationRows.querySelectorAll('button[data-roll]').forEach(btn => {
+          btn.addEventListener('click', () => triggerRollback(btn.getAttribute('data-roll')));
         });
       }
 
@@ -888,6 +1193,7 @@ function renderHtml(port: number): string {
       document.getElementById('refresh-branches').onclick = async () => { await loadBranches(); await loadTimeline(); };
       document.getElementById('refresh-audit').onclick = loadAudit;
       document.getElementById('refresh-integrity').onclick = loadIntegrity;
+      document.getElementById('refresh-ops').onclick = async () => { await loadApprovals(); await loadDrift(); await loadMigrations(); };
       document.getElementById('diff-btn').onclick = diffSelected;
       replayBtn.onclick = replayEntry;
       cherryBtn.onclick = cherryPick;
@@ -900,6 +1206,9 @@ function renderHtml(port: number): string {
         await loadAudit();
         await loadIntegrity();
         await diffSelected();
+        await loadApprovals();
+        await loadDrift();
+        await loadMigrations();
       })();
     </script>
   </body>

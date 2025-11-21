@@ -4,6 +4,7 @@ import { verifySnapshot, verifyChain } from '../lib/signing.js';
 import { listAuditEntries } from '../lib/auditStore.js';
 import crypto from 'node:crypto';
 import { verifySbom } from '../lib/sbom.js';
+import { verifyProvenance } from '../lib/provenance.js';
 
 export function registerVerifyCommand(program: Command) {
   const verify = program.command('verify').description('Verify signatures and chain integrity');
@@ -30,6 +31,21 @@ export function registerVerifyCommand(program: Command) {
     .option('--branch <branch>', 'Branch to verify')
     .action(async opts => {
       const res = await verifyChain(process.cwd(), opts.branch);
+      console.log(JSON.stringify(res, null, 2));
+      if (!res.ok) process.exitCode = 1;
+    });
+
+  verify
+    .command('provenance')
+    .description('Verify compiled.json against provenance.json hash')
+    .option('--provenance-path <path>', 'Path to provenance.json')
+    .option('--compiled-path <path>', 'Path to compiled.json')
+    .action(async opts => {
+      const res = await verifyProvenance({
+        baseDir: process.cwd(),
+        provenancePath: opts.provenancePath,
+        compiledPath: opts.compiledPath,
+      });
       console.log(JSON.stringify(res, null, 2));
       if (!res.ok) process.exitCode = 1;
     });

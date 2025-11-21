@@ -34,6 +34,20 @@ class MetricsRegistry {
     this.summaries.clear();
   }
 
+  snapshot(names?: string[]): { counters: Record<string, CounterSeries[]>; summaries: Record<string, SummarySeries[]> } {
+    const counters: Record<string, CounterSeries[]> = {};
+    const summaries: Record<string, SummarySeries[]> = {};
+    const counterEntries = names ? [...this.counters.entries()].filter(([name]) => names.includes(name)) : [...this.counters.entries()];
+    for (const [name, metric] of counterEntries) {
+      counters[name] = [...metric.series.values()];
+    }
+    const summaryEntries = names ? [...this.summaries.entries()].filter(([name]) => names.includes(name)) : [...this.summaries.entries()];
+    for (const [name, metric] of summaryEntries) {
+      summaries[name] = [...metric.series.values()];
+    }
+    return { counters, summaries };
+  }
+
   inc(name: string, labels: Labels = {}, help = ''): void {
     const seriesKey = labelsKey(labels);
     if (!this.counters.has(name)) {
@@ -126,4 +140,16 @@ export function recordPolicyReject(model?: string, operation?: string): void {
 export function recordMigrationDuration(db: string, appliedCount: number, durationMs: number): void {
   metrics.observe('laforge_migration_duration_ms', durationMs, { db }, 'Migration apply duration (ms)');
   metrics.inc('laforge_migrations_total', { db, applied: String(appliedCount) }, 'Migrations applied total');
+}
+
+export function recordWafBlock(reason: string, route: string): void {
+  metrics.inc('laforge_waf_blocks_total', { reason, route }, 'WAF blocked requests');
+}
+
+export function recordRateLimitBlock(route: string): void {
+  metrics.inc('laforge_rate_limit_blocks_total', { route }, 'Rate limit blocked requests');
+}
+
+export function recordPolicyChaosFailure(model: string, operation: string): void {
+  metrics.inc('laforge_policy_chaos_failures_total', { model, operation }, 'Policy chaos failures');
 }

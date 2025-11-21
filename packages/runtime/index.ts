@@ -9,6 +9,8 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import { createRequire } from 'node:module';
 import { withSpan } from './tracing.js';
+import crypto from 'node:crypto';
+export { runPolicyChaos } from './policyChaos.js';
 
 export interface UserContext {
   id: string;
@@ -115,8 +117,27 @@ export class LaForgeRuntime {
     return moduleResult.exports;
   }
 
+  private async verifyProvenance(compiledObject: CompilationOutput) {
+    const provPath = process.env.PROVENANCE_PATH || path.resolve('.laforge', 'provenance.json');
+    try {
+      const stat = await fs.stat(provPath);
+      if (!stat.isFile()) return;
+      const body = await fs.readFile(provPath, 'utf8');
+      const parsed = JSON.parse(body) as { compiledHash?: string };
+      if (!parsed.compiledHash) return;
+      const hash = crypto.createHash('sha256').update(JSON.stringify(compiledObject)).digest('hex');
+      if (hash !== parsed.compiledHash) {
+        throw new Error(`Provenance hash mismatch: expected ${parsed.compiledHash}, got ${hash}`);
+      }
+    } catch (err: any) {
+      if (err?.code === 'ENOENT') return;
+      throw err;
+    }
+  }
+
   async loadCompiled(compiledObject: CompilationOutput): Promise<CompilationOutput> {
     this.compiledCode = compiledObject;
+    await this.verifyProvenance(compiledObject);
 
     console.log(`${compiledObject.models.length} models compiled`);
     console.log('Creating database schema...');

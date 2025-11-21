@@ -217,6 +217,11 @@ export function createAuthPreHandler(config: AuthConfig) {
         audience: config.audience,
       });
       const user = mapPayloadToUser(payload, config);
+      const tenantHeader = (request.headers['x-tenant-id'] as string | undefined) ?? (request.headers['tenant'] as string | undefined);
+      if (tenantHeader && user.tenantId && tenantHeader !== user.tenantId) {
+        reply.code(403).send({ error: 'Tenant mismatch' });
+        return;
+      }
       (request as any).user = user;
     } catch (error: any) {
       reply.code(401).send({ error: 'Unauthorized', details: error.message });
@@ -233,6 +238,7 @@ export async function issueMockToken(
     omitTenant?: boolean;
     roles?: string[];
     claims?: Record<string, unknown>;
+    expiresInSeconds?: number;
   },
 ): Promise<{ token: string; payload: JWTPayload; expiresIn: number }> {
   if (config.provider !== 'mock') {
@@ -241,7 +247,7 @@ export async function issueMockToken(
 
   const { privateKey, publicJwk } = await ensureMockKeys();
   const now = Math.floor(Date.now() / 1000);
-  const expiresIn = 15 * 60; // 15 minutes
+  const expiresIn = overrides?.expiresInSeconds ?? 15 * 60; // 15 minutes
   const payload: JWTPayload = {
     sub: overrides?.sub ?? 'mock-user',
     iss: config.issuer,

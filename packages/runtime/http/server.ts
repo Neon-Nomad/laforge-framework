@@ -4,6 +4,7 @@ import { getDatabase } from '../db/database.js';
 import { LaForgeRuntime } from '../index.js';
 import type { ModelDefinition, HookDefinition } from '../../compiler/ast/types.js';
 import { createAuthPreHandler, issueMockToken, loadAuthConfigFromEnv } from './auth.js';
+import { applyPiiRedaction, applySecurityHeaders, createRateLimiter, createWafShield, parseRateLimit } from './controls.js';
 import { metrics, recordCompileDuration, recordHttpRequest, recordModelOperation, recordPolicyReject } from '../metrics.js';
 import { withSpan } from '../tracing.js';
 
@@ -20,6 +21,10 @@ const server = Fastify({
   },
 });
 
+const rateConfig = parseRateLimit(process.env.RATE_LIMIT || '100/min');
+const rateLimiter = createRateLimiter(rateConfig);
+const wafShield = createWafShield();
+
 // Allow API clients to call the compiler runtime
 await server.register(cors, {
   origin: true,
@@ -34,6 +39,8 @@ const authPreHandler = authConfig ? createAuthPreHandler(authConfig) : null;
 
 console.log('\nLaForge API server starting...\n');
 
+server.addHook('onRequest', rateLimiter);
+server.addHook('preHandler', wafShield);
 server.addHook('onRequest', (request, _reply, done) => {
   (request as any).metricsStart = Date.now();
   done();
@@ -46,6 +53,8 @@ server.addHook('onResponse', (request, reply, done) => {
   recordHttpRequest('runtime', routeLabel, request.method, reply.statusCode, duration);
   done();
 });
+server.addHook('onSend', applySecurityHeaders());
+server.addHook('onSend', applyPiiRedaction());
 
 // Health check
 server.get('/health', async () => ({ status: 'ok', message: 'LaForge Backend is running!' }));

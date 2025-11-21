@@ -14,6 +14,8 @@ import { registerVerifyCommand } from './commands/verify.js';
 import { registerApprovalCommands } from './commands/approval.js';
 import { registerDeployCommand } from './commands/deploy.js';
 import { registerExportCommand } from './commands/export.js';
+import { registerRollbackCommand } from './commands/rollback.js';
+import { registerDriftCommand } from './commands/drift.js';
 
 const program = new Command();
 
@@ -36,5 +38,7 @@ registerVerifyCommand(program);
 registerApprovalCommands(program);
 registerDeployCommand(program);
 registerExportCommand(program);
+registerRollbackCommand(program);
+registerDriftCommand(program);
 
 program.parseAsync(process.argv);

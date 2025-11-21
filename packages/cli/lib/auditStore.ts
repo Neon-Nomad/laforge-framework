@@ -20,6 +20,7 @@ export interface AuditFilters {
   model?: string;
   action?: string;
   user?: string;
+  type?: string;
   since?: string;
 }
 
@@ -65,6 +66,7 @@ function matchesFilter(entry: AuditEntry, filters: AuditFilters): boolean {
   if (filters.tenant && entry.tenantId !== filters.tenant) return false;
   if (filters.model && entry.model !== filters.model) return false;
   if (filters.action && entry.type !== filters.action) return false;
+  if (filters.type && entry.type !== filters.type) return false;
   if (filters.user && entry.userId !== filters.user) return false;
   const sinceDate = parseSince(filters.since);
   if (sinceDate && new Date(entry.timestamp) < sinceDate) return false;

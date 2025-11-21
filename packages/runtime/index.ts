@@ -10,7 +10,8 @@ import ts from 'typescript';
 import { createRequire } from 'node:module';
 import { withSpan } from './tracing.js';
 import crypto from 'node:crypto';
-import { collectSecretFields, decryptSecretFields, encryptSecretFields, ensureMasterKey, ensureSecretKey, validateResidency } from './dataProtection.js';
+import { collectSecretFields, decryptSecretFields, encryptSecretFields, ensureSecretKey, validateResidency } from './dataProtection.js';
+import { createKmsProvider, KmsProvider } from './kms.js';
 export { runPolicyChaos } from './policyChaos.js';
 
 export interface UserContext {
@@ -48,6 +49,7 @@ export class LaForgeRuntime {
   private zodSchemas: any = {};
   private sqlQueries: any = {};
   private auditLogFile: string;
+  private kmsProvider: KmsProvider;
 
   constructor(db: DatabaseConnection | any) {
     if (db && typeof (db as any).query === 'function' && typeof (db as any).exec === 'function') {
@@ -58,6 +60,7 @@ export class LaForgeRuntime {
     } else {
       throw new Error('Invalid database instance provided to LaForgeRuntime');
     }
+    this.kmsProvider = createKmsProvider();
     this.auditLogFile = process.env.LAFORGE_AUDIT_LOG || path.resolve('.laforge', 'audit', 'audit.ndjson');
   }
 
@@ -390,12 +393,15 @@ export class LaForgeRuntime {
 
     const secretFields = collectSecretFields(model);
     const hasSecrets = secretFields.length > 0;
-    const secretKey = hasSecrets && !ensureMasterKey() ? ensureSecretKey() : undefined;
+    const secretKey = hasSecrets ? (() => { try { return ensureSecretKey(); } catch { return undefined; } })() : undefined;
 
     const enforcedResidency = process.env.DATA_RESIDENCY || process.env.LAFORGE_RESIDENCY;
     if (operation === 'create' || operation === 'update') {
       validateResidency(model, data, enforcedResidency);
     }
+    const residencyOutcome = enforcedResidency
+      ? { enforced: enforcedResidency, violated: false, source: 'runtime' as const }
+      : { enforced: null, violated: false, source: 'runtime' as const };
 
     const audit = new AuditLogger(this.db);
     const camelCaseDb = {
@@ -418,8 +424,8 @@ export class LaForgeRuntime {
       let result;
 
       let incoming = data;
-      if (hasSecrets && secretKey && (operation === 'create' || operation === 'update')) {
-        incoming = encryptSecretFields(data, secretFields, secretKey);
+      if (hasSecrets && (operation === 'create' || operation === 'update')) {
+        incoming = await encryptSecretFields(data, secretFields, secretKey, this.kmsProvider);
       }
 
       switch (operation) {
@@ -446,8 +452,23 @@ export class LaForgeRuntime {
           throw new Error(`Unknown operation: ${operation}`);
       }
 
-      if (hasSecrets && secretKey) {
-        result = decryptSecretFields(result, secretFields, secretKey);
+      const guardPath = `${model.name}.${operation}`;
+      if (hasSecrets) {
+        result = await decryptSecretFields(result, secretFields, secretKey, this.kmsProvider, {
+          audit,
+          modelName: model.name,
+          userId: user.id,
+          tenantId: user.tenantId,
+          requestId: (user as any).requestId,
+          purpose: `${operation} result`,
+          guardPath,
+          residency: residencyOutcome,
+          abac: {
+            result: 'allow',
+            reason: 'Service RBAC/ABAC guard passed before decrypt',
+            trace: [{ rule: guardPath, result: 'allow', detail: 'domain guard allowed operation' }],
+          },
+        });
       }
 
       console.log('Operation successful');

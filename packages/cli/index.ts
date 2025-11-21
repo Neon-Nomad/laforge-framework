@@ -16,6 +16,7 @@ import { registerDeployCommand } from './commands/deploy.js';
 import { registerExportCommand } from './commands/export.js';
 import { registerRollbackCommand } from './commands/rollback.js';
 import { registerDriftCommand } from './commands/drift.js';
+import { registerKmsCommand } from './commands/kms.js';
 
 const program = new Command();
 
@@ -40,5 +41,6 @@ registerDeployCommand(program);
 registerExportCommand(program);
 registerRollbackCommand(program);
 registerDriftCommand(program);
+registerKmsCommand(program);
 
 program.parseAsync(process.argv);

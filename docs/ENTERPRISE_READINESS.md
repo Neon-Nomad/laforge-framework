@@ -54,6 +54,7 @@ Status: baseline compiler/Studio are stable for teams; this document lists the g
 - Secrets management integration (AWS/GCP/Azure/KMS) for generated services and Studio.
 - Privacy/compliance audit hooks (SOC2/ISO playbook alignment).
   - [started] DSL `pii`/`secret`/`residency(<region>)` captured; runtime redaction auto-uses compiled PII/secret fields; residency enforcement blocks create/update on mismatched runtime residency; secret fields encrypted with `LAFORGE_SECRET_KEY`.
+- [new] KMS plug-in layer with enc2 envelope tokens (provider + version metadata) supporting AWS/Azure/GCP/Vault/local; `/api/kms/health` + Studio Integrity card show provider/version/health; rotation via `laforge kms rotate` or Studio “KMS rotation” rewraps data keys without decrypting data; audit filters include `decrypt` and `pii_reveal_denied` for compliance review.
 
 ## 6) Supply Chain Security
 - SBOMs (CycloneDX/SPDX) for CLI/runtime and generated artifacts; attach to every release + provenance export. (`npm run sbom`, `laforge sign sbom`, `laforge verify sbom --require-signature`)

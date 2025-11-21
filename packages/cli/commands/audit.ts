@@ -6,6 +6,7 @@ function parseFilters(opts: any): AuditFilters {
     tenant: opts.tenant,
     model: opts.model,
     action: opts.action,
+    type: opts.type,
     user: opts.user,
     since: opts.since,
   };
@@ -43,6 +44,7 @@ export function registerAuditCommand(program: Command) {
     .option('--tenant <tenant>', 'Filter by tenant')
     .option('--model <model>', 'Filter by model')
     .option('--action <action>', 'Filter by action/type')
+    .option('--type <type>', 'Filter by audit type (e.g., decrypt, pii_reveal_denied)')
     .option('--user <user>', 'Filter by user id')
     .option('--since <since>', 'Filter since time (e.g., 1h, 30m, ISO)')
     .option('-n, --limit <limit>', 'Number of entries', '20')
@@ -60,6 +62,7 @@ export function registerAuditCommand(program: Command) {
     .option('--tenant <tenant>', 'Filter by tenant')
     .option('--model <model>', 'Filter by model')
     .option('--action <action>', 'Filter by action/type')
+    .option('--type <type>', 'Filter by audit type (e.g., decrypt, pii_reveal_denied)')
     .option('--user <user>', 'Filter by user id')
     .option('--since <since>', 'Filter since time (e.g., 1h, 30m, ISO)')
     .option('-n, --limit <limit>', 'Number of entries', '100')

@@ -20,6 +20,8 @@ import {
 import { recordApproval } from '../lib/approvals.js'
 import { listAuditEntries } from '../lib/auditStore.js'
 import { verifyChain, verifySnapshot } from '../lib/signing.js'
+import { createKmsProvider } from '../../runtime/kms.js'
+import { rotateEnc2Tokens, makeKmsProviderFromConfig } from '../lib/kms.js'
 import { generateMigrations } from '../../compiler/diffing/migrationGenerator.js'
 import { DatabaseConnection } from '../../runtime/db/database.js'
 import type { ModelDefinition } from '../../compiler/ast/types.js'
@@ -251,21 +253,40 @@ export async function buildStudioServer(opts: { baseDir?: string; port?: number 
     reply.send({ branch, entryId: entry.id, ...graph })
   })
 
-  fastify.get('/api/audit', async (request, reply) => {
-    const query = request.query as { tenant?: string; model?: string; action?: string; user?: string; since?: string; limit?: string }
-    const limit = query.limit ? Number(query.limit) : 100
-    const entries = await listAuditEntries(
-      {
-        tenant: query.tenant,
-        model: query.model,
-        action: query.action,
-        user: query.user,
-        since: query.since,
-      },
-      { limit, baseDir },
-    )
-    reply.send({ entries })
-  })
+      fastify.get('/api/audit', async (request, reply) => {
+        const query = request.query as { tenant?: string; model?: string; action?: string; type?: string; user?: string; since?: string; limit?: string }
+        const limit = query.limit ? Number(query.limit) : 100
+        const entries = await listAuditEntries(
+          {
+            tenant: query.tenant,
+            model: query.model,
+            action: query.action,
+            type: query.type || query.action,
+            user: query.user,
+            since: query.since,
+          },
+          { limit, baseDir },
+        )
+        reply.send({ entries })
+      })
+
+      fastify.get('/api/kms/health', async (_request, reply) => {
+        const kms = createKmsProvider()
+        const health = await kms.health()
+        reply.send({ provider: kms.provider, version: kms.version, ok: health.ok, message: health.message })
+      })
+
+      fastify.post('/api/kms/rotate', async (request, reply) => {
+        const body = request.body as { tokens?: string[]; provider?: string; version?: string; key?: string }
+        const tokens = (body.tokens || []).filter(Boolean)
+        if (!tokens.length) {
+          reply.code(400).send({ error: 'tokens are required (enc2 strings)' })
+          return
+        }
+        const kms = makeKmsProviderFromConfig({ provider: body.provider, version: body.version, keyId: body.key, keyName: body.key })
+        const rotated = await rotateEnc2Tokens(tokens, kms, body.version)
+        reply.send({ rotated, provider: kms.provider, version: kms.version || body.version })
+      })
 
   fastify.get('/api/integrity', async (request, reply) => {
     const query = request.query as { branch?: string }
@@ -686,8 +707,13 @@ function renderHtml(port: number): string {
           <input id="audit-user" placeholder="user id" />
           <input id="audit-model" placeholder="model" />
           <input id="audit-action" placeholder="action" />
+          <input id="audit-type" placeholder="type (decrypt/pii)" />
           <input id="audit-since" placeholder="since (e.g., 1h)" />
           <input id="audit-limit" placeholder="limit" value="50" />
+        </div>
+        <div class="row" style="gap:8px; flex-wrap:wrap;">
+          <button class="btn-ghost" id="audit-filter-decrypt">Decrypts</button>
+          <button class="btn-ghost" id="audit-filter-pii">PII denied</button>
         </div>
         <div style="overflow:auto; max-height:360px;">
           <table class="table">
@@ -708,11 +734,22 @@ function renderHtml(port: number): string {
         </div>
       </section>
 
+      <div id="audit-drawer" style="position:fixed; inset:0; display:none; background:rgba(0,0,0,0.6); backdrop-filter:blur(6px); z-index:50; align-items:center; justify-content:center;">
+        <div style="background:#0b1022; border:1px solid var(--border); border-radius:12px; padding:16px; width: min(720px, 92vw); max-height:80vh; overflow:auto;">
+          <div class="row" style="justify-content:space-between; align-items:center;">
+            <h2 style="margin:0;">Decrypt details</h2>
+            <button class="btn-ghost" id="audit-drawer-close">Close</button>
+          </div>
+          <div id="audit-drawer-body" class="diff" style="white-space:normal; margin-top:12px; background:#0f172a; padding:12px; border-radius:12px;"></div>
+        </div>
+      </div>
+
       <section class="panel stack">
         <div class="row" style="justify-content:space-between; align-items:center;">
           <h2 style="margin:0;">Integrity</h2>
           <button class="btn-ghost" id="refresh-integrity">Refresh</button>
         </div>
+        <div class="grid" id="kms-cards" style="grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap:8px; margin-bottom:8px;"></div>
         <div id="integrity-summary" class="muted">Chain not verified yet.</div>
         <div class="grid" id="provenance-cards" style="grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:8px;"></div>
         <div class="row" style="gap:10px; flex-wrap:wrap; align-items:center;">
@@ -721,6 +758,18 @@ function renderHtml(port: number): string {
           <label style="display:flex; align-items:center; gap:6px;"><input id="guard-provenance" type="checkbox" checked /> <span class="muted">Require provenance</span></label>
         </div>
         <div class="grid" id="deploy-guard" style="grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:8px; margin-top:8px;"></div>
+        <div class="card" style="margin-top:8px;">
+          <div class="row" style="justify-content:space-between; align-items:center;">
+            <div><div class="muted" style="font-size:12px;">Rotate enc2 tokens</div><div style="font-weight:700;">KMS rotation</div></div>
+            <button class="btn-ghost" id="kms-rotate">Rotate</button>
+          </div>
+          <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(160px,1fr)); gap:8px; margin-top:8px;">
+            <input id="kms-provider" placeholder="provider (aws|azure|gcp|vault|local)" />
+            <input id="kms-version" placeholder="target version (e.g., v2)" />
+          </div>
+          <textarea id="kms-tokens" rows="3" placeholder="enc2 tokens (one per line)" style="margin-top:8px; width:100%;"></textarea>
+          <div id="kms-rotate-status" class="muted" style="margin-top:6px;">No rotation yet.</div>
+        </div>
         <div style="overflow:auto; max-height:280px;">
           <table class="table">
             <thead>
@@ -838,13 +887,25 @@ function renderHtml(port: number): string {
       const auditUser = document.getElementById('audit-user');
       const auditModel = document.getElementById('audit-model');
       const auditAction = document.getElementById('audit-action');
+      const auditType = document.getElementById('audit-type');
       const auditSince = document.getElementById('audit-since');
       const auditLimit = document.getElementById('audit-limit');
+      const auditFilterDecrypt = document.getElementById('audit-filter-decrypt');
+      const auditFilterPii = document.getElementById('audit-filter-pii');
+      const kmsProvider = document.getElementById('kms-provider');
+      const kmsVersion = document.getElementById('kms-version');
+      const kmsTokens = document.getElementById('kms-tokens');
+      const kmsRotateBtn = document.getElementById('kms-rotate');
+      const kmsRotateStatus = document.getElementById('kms-rotate-status');
       const erdCanvas = document.getElementById('erd-canvas');
       const erdDetail = document.getElementById('erd-detail');
       const blameBtn = document.getElementById('show-blame');
       const integrityRows = document.getElementById('integrity-rows');
+      const kmsCards = document.getElementById('kms-cards');
       const integritySummary = document.getElementById('integrity-summary');
+      const auditDrawer = document.getElementById('audit-drawer');
+      const auditDrawerBody = document.getElementById('audit-drawer-body');
+      const auditDrawerClose = document.getElementById('audit-drawer-close');
       const provenanceCards = document.getElementById('provenance-cards');
       const guardSigned = document.getElementById('guard-signed');
       const guardApproved = document.getElementById('guard-approved');
@@ -854,6 +915,15 @@ function renderHtml(port: number): string {
       const migrationRows = document.getElementById('migration-rows');
       const policyImpact = document.getElementById('policy-impact');
       const deployGuard = document.getElementById('deploy-guard');
+
+      function escapeHtml(value) {
+        return String(value ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
 
       async function fetchJSON(url, opts) {
         const res = await fetch(url, opts);
@@ -867,6 +937,7 @@ function renderHtml(port: number): string {
         if (auditUser.value) params.append('user', auditUser.value);
         if (auditModel.value) params.append('model', auditModel.value);
         if (auditAction.value) params.append('action', auditAction.value);
+        if (auditType.value) params.append('type', auditType.value);
         if (auditSince.value) params.append('since', auditSince.value);
         const limitVal = Number(auditLimit.value) || 50;
         params.append('limit', String(limitVal));
@@ -891,6 +962,10 @@ function renderHtml(port: number): string {
             <td>\${entry.type}</td>
             <td style="max-width:280px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">\${entry.data ? JSON.stringify(entry.data) : (entry.artifactHash || '')}</td>
           \`;
+          if (entry.type === 'decrypt' && entry.data) {
+            tr.style.cursor = 'pointer';
+            tr.onclick = () => openDecryptDetails(entry);
+          }
           auditRows.appendChild(tr);
         });
       }
@@ -903,6 +978,7 @@ function renderHtml(port: number): string {
         loadDrift().catch(err => console.error(err));
         loadMigrations().catch(err => console.error(err));
         loadDeployGuard().catch(err => console.error(err));
+        loadKms().catch(err => console.error(err));
       }
 
       function renderIntegrity(data) {
@@ -1057,6 +1133,114 @@ function renderHtml(port: number): string {
             }
           });
         });
+      }
+
+      async function loadKms() {
+        try {
+          const data = await fetchJSON('/api/kms/health');
+          renderKms(data);
+        } catch (err) {
+          renderKms({ ok: false, message: (err && err.message) || 'KMS health failed' });
+        }
+      }
+
+      function renderKms(data) {
+        kmsCards.innerHTML = '';
+        const ok = data?.ok;
+        const provider = data?.provider || 'unknown';
+        const version = data?.version || 'v1';
+        const status = ok ? '<span class="status-ok">healthy</span>' : '<span class="status-bad">unhealthy</span>';
+        const msg = data?.message || (ok ? 'KMS reachable' : 'Check master key / provider config');
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.innerHTML = \`
+          <div class="row" style="justify-content:space-between; align-items:center;">
+            <div><div class="muted" style="font-size:12px;">Provider</div><div style="font-weight:700; font-size:16px;">\${provider}</div></div>
+            <div class="badge">\${status}</div>
+          </div>
+          <div class="muted" style="margin-top:6px;">Version: \${version}</div>
+          <div class="muted" style="margin-top:4px; font-size:12px;">\${msg}</div>
+        \`;
+        kmsCards.appendChild(card);
+      }
+
+      async function rotateKmsTokens() {
+        const tokens = (kmsTokens.value || '')
+          .split(/\\r?\\n/)
+          .map(l => l.trim())
+          .filter(Boolean);
+        if (!tokens.length) {
+          kmsRotateStatus.textContent = 'Provide enc2 tokens to rotate.';
+          return;
+        }
+        kmsRotateStatus.textContent = 'Rotating...';
+        try {
+          const body = {
+            tokens,
+            provider: kmsProvider.value || undefined,
+            version: kmsVersion.value || undefined,
+          };
+          const res = await fetch('/api/kms/rotate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+          if (!res.ok) {
+            const text = await res.text();
+            throw new Error(text || 'Rotation failed');
+          }
+          const data = await res.json();
+          kmsTokens.value = (data.rotated || []).join('\\n');
+          kmsRotateStatus.innerHTML = \`<span class="status-ok">Rotated \${tokens.length} tokens with \${data.provider} v\${data.version}</span>\`;
+          loadAudit().catch(() => {});
+        } catch (err) {
+          kmsRotateStatus.innerHTML = \`<span class="status-bad">\${err?.message || err}</span>\`;
+        }
+      }
+
+      function openDecryptDetails(entry) {
+        const abac = entry.data?.abac || {};
+        const residency = entry.data?.residency || {};
+        const trace = abac.trace || [];
+        const kmsInfo = entry.data?.kms ? \`\${entry.data.kms} \${entry.data.keyVersion ? 'v' + entry.data.keyVersion : ''}\` : 'unknown';
+        const traceHtml = trace.length
+          ? '<ul style="margin:6px 0 0 14px; padding:0;">' +
+            trace
+              .map(
+                t =>
+                  \`<li style="margin-bottom:4px;"><strong>\${escapeHtml(t.rule || '')}</strong> → \${escapeHtml(t.result || 'unknown')}<div class="muted">\${escapeHtml(t.detail || '')}</div></li>\`,
+              )
+              .join('') +
+            '</ul>'
+          : '<div class="muted">No ABAC trace recorded.</div>';
+        const residencyHtml = \`
+          <div><strong>Enforced:</strong> \${escapeHtml(residency.enforced ?? 'none')}</div>
+          <div><strong>Violated:</strong> \${residency.violated ? 'yes' : 'no'}</div>
+          \${residency.source ? '<div class="muted">Source: ' + escapeHtml(residency.source) + '</div>' : ''}
+        \`;
+        auditDrawerBody.innerHTML = \`
+          <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:8px;">
+            <div class="card"><div class="muted" style="font-size:11px; text-transform:uppercase;">Guard path</div><div style="font-weight:700;">\${escapeHtml(entry.data?.guardPath || '(unknown)')}</div></div>
+            <div class="card"><div class="muted" style="font-size:11px; text-transform:uppercase;">KMS</div><div style="font-weight:700;">\${escapeHtml(kmsInfo)}</div></div>
+            <div class="card"><div class="muted" style="font-size:11px; text-transform:uppercase;">User</div><div>\${escapeHtml(entry.userId || 'unknown')}</div></div>
+            <div class="card"><div class="muted" style="font-size:11px; text-transform:uppercase;">Tenant</div><div>\${escapeHtml(entry.tenantId || 'default')}</div></div>
+          </div>
+          <div class="card" style="margin-top:8px;">
+            <div class="muted" style="font-size:11px; text-transform:uppercase;">Why was this decrypted?</div>
+            <div style="font-weight:700; margin-top:6px;">\${escapeHtml(abac.reason || 'Guard allowed read')}</div>
+            <div class="muted" style="margin-top:4px;">Result: \${escapeHtml(abac.result || 'unknown')}</div>
+            \${abac.expression ? '<div class="muted" style="margin-top:4px;">Expr: ' + escapeHtml(abac.expression) + '</div>' : ''}
+          </div>
+          <div class="card" style="margin-top:8px;">
+            <div class="muted" style="font-size:11px; text-transform:uppercase;">ABAC Trace</div>
+            \${traceHtml}
+          </div>
+          <div class="card" style="margin-top:8px;">
+            <div class="muted" style="font-size:11px; text-transform:uppercase;">Residency outcome</div>
+            \${residencyHtml}
+          </div>
+          <div class="card" style="margin-top:8px;">
+            <div class="muted" style="font-size:11px; text-transform:uppercase;">Raw event</div>
+            <pre style="white-space:pre-wrap; margin-top:6px;">\${escapeHtml(JSON.stringify(entry, null, 2))}</pre>
+          </div>
+        \`;
+        auditDrawer.style.display = 'flex';
       }
 
       async function loadDrift() {
@@ -1436,7 +1620,12 @@ function renderHtml(port: number): string {
       replayBtn.onclick = replayEntry;
       cherryBtn.onclick = cherryPick;
       document.getElementById('erd-refresh').onclick = () => loadErd(entrySelect.value);
+      kmsRotateBtn.onclick = rotateKmsTokens;
       blameBtn.onclick = () => blameDsl(entrySelect.value, compareSelect.value);
+      auditFilterDecrypt.onclick = () => { auditType.value = 'decrypt'; loadAudit(); };
+      auditFilterPii.onclick = () => { auditType.value = 'pii_reveal_denied'; loadAudit(); };
+      auditDrawerClose.onclick = () => { auditDrawer.style.display = 'none'; };
+      auditDrawer.onclick = (e) => { if (e.target === auditDrawer) auditDrawer.style.display = 'none'; };
 
       (async () => {
         await loadBranches();

@@ -3,6 +3,7 @@ import { listHistoryEntries } from '../lib/history.js';
 import { verifySnapshot, verifyChain } from '../lib/signing.js';
 import { listAuditEntries } from '../lib/auditStore.js';
 import crypto from 'node:crypto';
+import { verifySbom } from '../lib/sbom.js';
 
 export function registerVerifyCommand(program: Command) {
   const verify = program.command('verify').description('Verify signatures and chain integrity');
@@ -47,5 +48,15 @@ export function registerVerifyCommand(program: Command) {
       }
       const result = { count: sorted.length, digest: prev };
       console.log(JSON.stringify(result, null, 2));
+    });
+
+  verify
+    .command('sbom')
+    .description('Verify SBOM hashes and optional signature')
+    .option('--require-signature', 'Fail if sbom.sig is missing', false)
+    .action(async opts => {
+      const res = await verifySbom({ requireSignature: Boolean(opts.requireSignature) });
+      console.log(JSON.stringify(res, null, 2));
+      if (!res.ok) process.exitCode = 1;
     });
 }

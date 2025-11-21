@@ -2,6 +2,7 @@ import { Command } from 'commander';
 import pc from 'picocolors';
 import { applyMigrations, loadSnapshot } from '../lib/persistence.js';
 import { recordHistoryEntry } from '../lib/history.js';
+import { withSpan } from '../../runtime/tracing.js';
 
 export function registerMigrateCommand(program: Command) {
   program
@@ -13,12 +14,17 @@ export function registerMigrateCommand(program: Command) {
     .option('--check', 'CI mode: exit non-zero if there are pending migrations', false)
     .action(async (options: { db?: string; to?: string; dryRun?: boolean; check?: boolean }) => {
       try {
-        const result = await applyMigrations({
-          dbPath: options.db,
-          to: options.to,
-          dryRun: options.dryRun,
-          check: options.check,
-        });
+        const result = await withSpan(
+          'cli.migrate.apply',
+          { dbPath: options.db || '.laforge/dev.db' },
+          async () =>
+            applyMigrations({
+              dbPath: options.db,
+              to: options.to,
+              dryRun: options.dryRun,
+              check: options.check,
+            }),
+        );
 
         if (options.check && result.pending.length > 0) {
           console.error(pc.red(`Pending migrations: ${result.pending.join(', ')}`));

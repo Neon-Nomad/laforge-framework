@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 import { compileForSandbox } from '../../compiler/index.js';
 import { readDomainFile, writeCompilationOutput } from './utils.js';
+import { withSpan } from '../../runtime/tracing.js';
 
 export function registerCompileCommand(program: Command) {
   program
@@ -10,7 +11,7 @@ export function registerCompileCommand(program: Command) {
     .action(async (domainFile: string, options: { out?: string }) => {
       try {
         const { resolvedPath, content } = await readDomainFile(domainFile);
-        const output = compileForSandbox(content);
+        const output = await withSpan('cli.compile', { file: resolvedPath }, async () => compileForSandbox(content));
 
         console.log(`Compiled ${output.models.length} models from ${resolvedPath}`);
         output.models.forEach(model => {

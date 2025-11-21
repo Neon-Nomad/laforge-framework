@@ -1,0 +1,83 @@
+{
+  "title": "LaForge Observability",
+  "timezone": "browser",
+  "schemaVersion": 36,
+  "version": 1,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "HTTP Request Rate",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by (source, route, method)(rate(laforge_http_requests_total[5m]))",
+          "legendFormat": "{{source}} {{method}} {{route}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP Latency (avg ms)",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by (source, route)(rate(laforge_http_request_duration_ms_sum[5m])) / sum by (source, route)(rate(laforge_http_request_duration_ms_count[5m]))",
+          "legendFormat": "{{source}} {{route}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "RBAC/ABAC Reject Rate",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum by (model, operation)(rate(laforge_policy_rejects_total[5m]))",
+          "legendFormat": "{{model}} {{operation}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Migration Duration (avg ms)",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum by (db)(rate(laforge_migration_duration_ms_sum[5m])) / sum by (db)(rate(laforge_migration_duration_ms_count[5m]))",
+          "legendFormat": "{{db}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Compile/Generate Duration (avg ms)",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum(rate(laforge_compile_duration_ms_sum[5m])) / sum(rate(laforge_compile_duration_ms_count[5m]))",
+          "legendFormat": "runtime compile"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Model Ops Success/Failure",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum by (model, operation, success)(rate(laforge_model_operations_total[5m]))",
+          "legendFormat": "{{model}} {{operation}} success={{success}}"
+        }
+      ]
+    }
+  ],
+  "templating": {
+    "list": []
+  }
+}

@@ -11,6 +11,7 @@ import chalk from 'chalk';
 import { exec as execCallback } from 'child_process';
 import { promisify } from 'util';
 import type { ModelDefinition } from '../../compiler/ast/types.js';
+import { withSpan } from '../../runtime/tracing.js';
 
 const exec = promisify(execCallback);
 
@@ -29,18 +30,23 @@ export function registerGenerateCommand(program: Command) {
       try {
         const startedAt = Date.now();
         const { resolvedPath, content } = await readDomainFile(domainFile);
-        const output = compileForSandbox(content);
+        const output = await withSpan('cli.generate.compile', { file: resolvedPath }, async () => compileForSandbox(content));
 
         // 1. Backend Generation
         const targetDir = options.out || path.join(path.dirname(resolvedPath), 'generated');
         await fs.rm(targetDir, { recursive: true, force: true }).catch(() => {});
         const files = await writeCompilationOutput(resolvedPath, output, targetDir);
 
-        const migrationResult = await generateIncrementalMigration({
-          domainFile: resolvedPath,
-          allowDestructive: options.allowDestructive,
-          db: (options.db as any) || 'postgres',
-        });
+        const migrationResult = await withSpan(
+          'cli.generate.migrations',
+          { db: options.db || 'postgres' },
+          async () =>
+            generateIncrementalMigration({
+              domainFile: resolvedPath,
+              allowDestructive: options.allowDestructive,
+              db: (options.db as any) || 'postgres',
+            }),
+        );
 
         const autoMigrateSummary = await autoMigrateNewMigrations({
           migrationNames: migrationResult.migrationNames,

@@ -38,13 +38,10 @@ Status: baseline compiler/Studio are stable for teams; this document lists the g
 - Default-off flags for signing enforcement and approval gating; enable in staged rollouts.
 
 ## 3) Observability & Ops
-- OpenTelemetry traces, metrics, and structured logs for compiler, Studio, and generated services.
-- Health/readiness probes; p95/p99 migration timings.
-- Exporters for Prometheus/Grafana; log shipping hooks.
-- Immediate next tasks:
-  - Add `/metrics` endpoint to runtime + Studio server (Prometheus format) with counters: requests by model/action, RLS/ABAC rejects, compile/migration timings.
-  - Add tracing hooks (OTEL) around compile, generate, migrate, and request handlers (generated services + Studio APIs).
-  - Tests: snapshot metrics output and assert key counters; budget p95 target in test harness for migrations.
+- ✅ Prometheus `/metrics` for runtime + Studio with HTTP rate/latency, model ops, RBAC/ABAC rejects, compile and migration durations; health (`/health`) and readiness (`/ready`) probes shipped.
+- ✅ Optional OTEL spans around CLI compile/generate/migrate, runtime compile/execute, and generated services (create/read/update/delete) via `traceSpan` hook.
+- ✅ Sample Grafana dashboard: `docs/grafana-dashboard-laforge.json` (HTTP rate/latency, migration duration, reject rate, compile/generate duration, model ops success/failure).
+- Next: OTEL exporter config/snippets, log shipping guidance, and p95 budget tests for migrations.
 
 ## 4) Deployment Hardening
 - HA guidance and artifacts: container images, Helm charts, K8s manifests.
@@ -58,8 +55,31 @@ Status: baseline compiler/Studio are stable for teams; this document lists the g
 - Privacy/compliance audit hooks (SOC2/ISO playbook alignment).
 
 ## 6) Supply Chain Security
-- SBOM generation for releases; signed installers/binaries.
-- Reproducible builds scripts; artifact integrity checks in CI.
+- SBOMs (CycloneDX/SPDX) for CLI/runtime and generated artifacts; attach to every release + provenance export. (`npm run sbom`, `laforge sign sbom`, `laforge verify sbom --require-signature`)
+- Signed artifacts: npm package signing + existing snapshot signatures; optional cosign/sigstore for containers/zips. (`npm run ci:supplychain:strict` enforces SBOM + signature in CI)
+- Repro builds: locked deps, deterministic zip/tar outputs for generated code; reproducible generate/build scripts.
+- CI gate: dependency scanning (npm audit/GHAS/Snyk) and signature/SBOM verification before publish/deploy.
+
+### Phased plan
+1) **Visibility** (SBOM + lock discipline)
+   - Add `npm run sbom` to emit CycloneDX for root/workspaces and generated output; store in `.laforge/sbom/`.
+   - Enforce lockfile checks and hash/prevHash in generated bundles; attach SBOM to provenance export; `laforge verify sbom` used in pipelines.
+2) **Signing and provenance**
+   - Sign npm packages and container images (cosign/sigstore); embed snapshot hash/version in build info.
+   - Extend `laforge verify` to accept SBOM + signature inputs; CI template that blocks on invalid signatures (`npm run ci:supplychain:strict`).
+3) **Reproducibility**
+   - Deterministic generate/build: pin node version, normalize timestamps in archives, stable hashing of compiled.json/migrations.
+   - Add `npm run repro` script that rebuilds generated assets and diffs against expected hashes.
+4) **Scanning/Gating**
+   - Default CI steps: npm audit (fail on high), SAST for generated code, license policy checks.
+   - Optional “trusted deps only” mode: allowlist hash set for high-risk deps.
+
+### Deliverables
+- CLI scripts: `npm run sbom`, `laforge verify chain` reused for provenance; sample GitHub Actions workflow for SBOM+signing gates.
+- Documentation: how to publish signed packages, verify signatures, and consume SBOMs.
+- Sample Grafana/Prometheus dashboard stays in `docs/grafana-dashboard-laforge.json` for ops reporting.
+- CI hooks: `npm run ci:supplychain` (SBOM + repro + sbom verification); `npm run verify:sbom` checks lockfile hash drift.
+- Optional signing: `npm run sign:sbom` / `npm run verify:sbom:sig` when `.laforge/keys/ed25519_private.pem` is present; wire into release CI when keys are available.
 
 ## 7) Runtime Controls
 - Rate limiting and WAF hook points for generated routes.

@@ -4,6 +4,8 @@ import { getDatabase } from '../db/database.js';
 import { LaForgeRuntime } from '../index.js';
 import type { ModelDefinition, HookDefinition } from '../../compiler/ast/types.js';
 import { createAuthPreHandler, issueMockToken, loadAuthConfigFromEnv } from './auth.js';
+import { metrics, recordCompileDuration, recordHttpRequest, recordModelOperation, recordPolicyReject } from '../metrics.js';
+import { withSpan } from '../tracing.js';
 
 const server = Fastify({
   logger: {
@@ -32,8 +34,37 @@ const authPreHandler = authConfig ? createAuthPreHandler(authConfig) : null;
 
 console.log('\nLaForge API server starting...\n');
 
+server.addHook('onRequest', (request, _reply, done) => {
+  (request as any).metricsStart = Date.now();
+  done();
+});
+
+server.addHook('onResponse', (request, reply, done) => {
+  const started = (request as any).metricsStart as number | undefined;
+  const duration = started ? Date.now() - started : 0;
+  const routeLabel = request.routeOptions?.url || request.url;
+  recordHttpRequest('runtime', routeLabel, request.method, reply.statusCode, duration);
+  done();
+});
+
 // Health check
 server.get('/health', async () => ({ status: 'ok', message: 'LaForge Backend is running!' }));
+
+// Readiness probe: verifies DB connectivity and compile state (if available)
+server.get('/ready', async (_req, reply) => {
+  try {
+    const res = await db.query('SELECT 1 as ok');
+    const compiled = !!runtime.getCompiledCode?.();
+    reply.send({ status: 'ok', db: res.rows?.[0]?.ok === 1, compiled });
+  } catch (err: any) {
+    reply.code(503).send({ status: 'error', message: err?.message || 'unready' });
+  }
+});
+
+// Metrics endpoint (Prometheus format)
+server.get('/metrics', async (_req, reply) => {
+  reply.header('Content-Type', 'text/plain; version=0.0.4').send(metrics.exportPrometheus());
+});
 
 if (authConfig?.provider === 'mock') {
   server.post<{
@@ -61,7 +92,9 @@ server.post<{
     server.log.info('Received compilation request');
 
     runtime = new LaForgeRuntime(db);
-    const compiledOutput = await runtime.compile(dsl);
+    const started = Date.now();
+    const compiledOutput = await withSpan('runtime.compile', { route: '/api/compile' }, async () => runtime.compile(dsl));
+    recordCompileDuration(Date.now() - started);
 
     server.log.info(`Compilation successful: ${compiledOutput.models.length} models`);
 
@@ -127,12 +160,21 @@ server.post<{
       const roleLabel = resolvedUser.role ?? resolvedUser.roles?.[0] ?? 'unknown';
       server.log.info(`Executing ${operation} on ${modelName} as ${resolvedUser.id} (${roleLabel})`);
 
-      const result = await runtime.execute(modelName, operation, resolvedUser, data);
+      const result = await withSpan(
+        'runtime.execute',
+        { model: modelName, operation, user: resolvedUser.id },
+        () => runtime.execute(modelName, operation, resolvedUser, data),
+      );
 
       if (result.success) {
         server.log.info(`${operation} successful`);
+        recordModelOperation(modelName, operation, true);
       } else {
         server.log.warn(`${operation} failed: ${result.error}`);
+        recordModelOperation(modelName, operation, false);
+        if (/permission|unauthorized/i.test(result.error || '')) {
+          recordPolicyReject(modelName, operation);
+        }
       }
 
       return result;

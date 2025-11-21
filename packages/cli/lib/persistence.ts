@@ -7,6 +7,7 @@ import type { ModelDefinition } from '../../compiler/ast/types.js';
 import { DatabaseConnection } from '../../runtime/db/database.js';
 import { PostgresConnection } from '../../runtime/db/postgres.js';
 import { MySQLConnection } from '../../runtime/db/mysql.js';
+import { recordMigrationDuration } from '../../runtime/metrics.js';
 
 const LAFORGE_DIR = '.laforge';
 const SCHEMA_FILE = 'schema.json';
@@ -191,12 +192,19 @@ export async function applyMigrations(opts: ApplyOptions): Promise<{ applied: st
     await ensureDir(path.dirname(dbPath));
   }
   const db = isPgUrl ? new PostgresConnection(dbPath) : isMyUrl ? new MySQLConnection(dbPath) : new DatabaseConnection(dbPath);
+  const started = Date.now();
+  let appliedCount = 0;
   for (const mig of targetList) {
     const content = await fs.readFile(path.join(paths(baseDir).migrationsDir, mig), 'utf8');
     await db.exec(content);
     state.applied.push(mig);
+    appliedCount += 1;
   }
   await saveState(state, baseDir);
+  if (appliedCount > 0) {
+    const dbLabel = isPgUrl ? 'postgres' : isMyUrl ? 'mysql' : 'sqlite';
+    recordMigrationDuration(dbLabel, appliedCount, Date.now() - started);
+  }
 
   return { applied: targetList, pending: [] };
 }

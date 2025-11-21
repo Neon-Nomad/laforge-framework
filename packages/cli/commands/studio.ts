@@ -23,6 +23,8 @@ import { DatabaseConnection } from '../../runtime/db/database.js'
 import type { ModelDefinition } from '../../compiler/ast/types.js'
 import type { SchemaOperation } from '../../compiler/diffing/schemaDiff.js'
 import { diffLines } from 'diff'
+import { metrics, recordHttpRequest } from '../../runtime/metrics.js'
+import { withSpan } from '../../runtime/tracing.js'
 
 export function registerStudioCommand(program: Command) {
   program
@@ -48,8 +50,38 @@ export async function buildStudioServer(opts: { baseDir?: string; port?: number 
   const baseDir = opts.baseDir || process.cwd()
   const fastify = Fastify({ logger: false })
 
+  fastify.addHook('onRequest', (request, _reply, done) => {
+    ;(request as any).metricsStart = Date.now()
+    done()
+  })
+
+  fastify.addHook('onResponse', (request, reply, done) => {
+    const started = (request as any).metricsStart as number | undefined
+    const duration = started ? Date.now() - started : 0
+    const routeLabel = request.routeOptions?.url || request.url
+    recordHttpRequest('studio', routeLabel, request.method, reply.statusCode, duration)
+    done()
+  })
+
+  fastify.get('/metrics', async (_req, reply) => {
+    reply.header('Content-Type', 'text/plain; version=0.0.4').send(metrics.exportPrometheus())
+  })
+
   fastify.get('/', async (_, reply) => {
     reply.type('text/html').send(renderHtml(port))
+  })
+
+  fastify.get('/health', async (_req, reply) => {
+    reply.send({ status: 'ok', message: 'Studio server is running', port })
+  })
+
+  fastify.get('/ready', async (_req, reply) => {
+    try {
+      await getCurrentBranch(baseDir)
+      reply.send({ status: 'ok', baseDir })
+    } catch (err: any) {
+      reply.code(503).send({ status: 'error', message: err?.message || 'unready' })
+    }
   })
 
   fastify.post('/generate', async (request, reply) => {
@@ -66,7 +98,7 @@ export async function buildStudioServer(opts: { baseDir?: string; port?: number 
       const domainPath = path.join(tmpDir, 'domain.dsl.ts')
       await fs.writeFile(domainPath, dsl, 'utf8')
 
-      const output = compileForSandbox(dsl)
+      const output = await withSpan('studio.generate.compile', { route: '/generate' }, async () => compileForSandbox(dsl))
       const backendDir = path.join(tmpDir, 'generated')
       const files = await writeCompilationOutput(domainPath, output, backendDir)
       const zipPath = await zipDirectories([backendDir], path.join(tmpDir, 'laforge-output.zip'))

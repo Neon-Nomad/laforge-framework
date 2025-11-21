@@ -8,6 +8,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import ts from 'typescript';
 import { createRequire } from 'node:module';
+import { withSpan } from './tracing.js';
 
 export interface UserContext {
   id: string;
@@ -276,6 +277,7 @@ export class LaForgeRuntime {
       URL,
       URLSearchParams,
       AuditLogger,
+      traceSpan: withSpan,
       AuthorizationError: class extends Error {
         constructor(message: string) {
           super(message);

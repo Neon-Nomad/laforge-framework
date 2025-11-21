@@ -11,7 +11,7 @@ interface KeyPair {
   publicKey: crypto.KeyObject;
 }
 
-function defaultKeyPaths(baseDir: string) {
+export function defaultKeyPaths(baseDir: string) {
   const root = laforgePaths(baseDir).root;
   return {
     priv: path.join(root, 'keys', 'ed25519_private.pem'),
@@ -19,7 +19,7 @@ function defaultKeyPaths(baseDir: string) {
   };
 }
 
-async function readKeyPair(baseDir: string, privPath?: string, pubPath?: string): Promise<KeyPair> {
+export async function readKeyPair(baseDir: string, privPath?: string, pubPath?: string): Promise<KeyPair> {
   const paths = defaultKeyPaths(baseDir);
   const privateKeyPem = await fs.readFile(privPath || paths.priv, 'utf8');
   const privateKey = crypto.createPrivateKey(privateKeyPem);

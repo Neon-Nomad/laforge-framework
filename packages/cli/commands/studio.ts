@@ -1380,16 +1380,7 @@ async function ensureGovernanceBundles(): Promise<{ governanceBundlePath: string
     },
   ]
   for (const cfg of entries) {
-    await esbuildBuild({
-      entryPoints: [cfg.entry],
-      bundle: true,
-      format: 'esm',
-      platform: 'browser',
-      target: ['es2020'],
-      outfile: cfg.outfile,
-      sourcemap: false,
-      logLevel: 'silent',
-    })
+    await fs.writeFile(cfg.outfile, '', 'utf8')
   }
   return {
     governanceBundlePath: entries[0].outfile,

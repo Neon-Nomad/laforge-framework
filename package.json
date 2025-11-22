@@ -32,6 +32,8 @@
     "build:auto-migrate": "tsc -p packages/auto-migrate/tsconfig.json",
     "test:auto-migrate": "vitest run --config packages/auto-migrate/vitest.config.ts",
     "dev": "tsx watch packages/cli/index.ts",
+    "dev:frontend": "npm --prefix generated_frontend/frontend run dev",
+    "studio": "concurrently -n \"backend,frontend\" -c \"cyan,magenta\" \"npm run dev\" \"npm run dev:frontend\"",
     "forge": "node ./dist/packages/cli/index.js",
     "smoke": "node scripts/smoke-fullstack.mjs"
   },
@@ -68,6 +70,7 @@
     "@types/node": "^20.10.6",
     "@types/pg": "^8.11.2",
     "@types/uuid": "^9.0.7",
+    "concurrently": "^8.2.2",
     "tsx": "^4.7.0",
     "vitest": "^4.0.9"
   }

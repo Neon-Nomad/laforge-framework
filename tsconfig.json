@@ -12,8 +12,16 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true,
-    "types": ["node", "vitest"]
+    "types": ["node", "vitest"],
+    "jsx": "react-jsx"
   },
   "include": ["packages/**/*"],
-  "exclude": ["dist", "node_modules", "examples/**/*", "tests/**/*"]
+  "exclude": [
+    "dist",
+    "node_modules",
+    "examples/**/*",
+    "tests/**/*",
+    "packages/cli/studioHarnessClient.tsx",
+    "packages/cli/studioAuditIntegrityClient.tsx"
+  ]
 }

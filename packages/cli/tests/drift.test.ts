@@ -20,11 +20,13 @@ const compiled: CompilationOutput = {
       extensions: [],
     },
   ],
+  ast: '',
   sql: '',
   zod: '',
   domain: '',
-  config: { db: 'sqlite', dialect: 'postgres-rds', domain: '', outDir: '', audit: false, multiTenant: true },
-  queries: [],
+  rls: '',
+  routes: '',
+  config: { db: 'sqlite', dialect: 'postgres-rds', domain: [], outDir: 'generated', audit: false, multiTenant: true },
   migrations: [],
 };
 

@@ -3,6 +3,7 @@ import os from 'node:os'
 import fs from 'node:fs/promises'
 import { Command } from 'commander'
 import Fastify, { type FastifyInstance } from 'fastify'
+import { build as esbuildBuild } from 'esbuild'
 import { compileForSandbox, type CompilationOutput } from '../../compiler/index.js'
 import { writeCompilationOutput } from './utils.js'
 import { zipDirectories } from '../lib/zip.js'
@@ -33,6 +34,14 @@ import { verifyProvenance } from '../lib/provenance.js'
 import { detectDrift } from '../../runtime/drift.js'
 import { isApproved } from '../lib/approvals.js'
 
+type DriftSnapshot = {
+  enabled: boolean
+  reason?: string
+  compiledPath?: string
+  dbPath?: string
+  drift?: Array<{ table: string; missingColumns: string[]; extraColumns: string[] }>
+}
+
 export function registerStudioCommand(program: Command) {
   program
     .command('studio')
@@ -56,6 +65,7 @@ export async function buildStudioServer(opts: { baseDir?: string; port?: number 
   const port = Number(opts.port ?? 4173) || 4173
   const baseDir = opts.baseDir || process.cwd()
   const fastify = Fastify({ logger: false })
+  const { governanceBundlePath, auditIntegrityBundlePath } = await ensureGovernanceBundles()
 
   fastify.addHook('onRequest', (request, _reply, done) => {
     ;(request as any).metricsStart = Date.now()
@@ -86,6 +96,20 @@ export async function buildStudioServer(opts: { baseDir?: string; port?: number 
 
   fastify.get('/', async (_, reply) => {
     reply.type('text/html').send(renderHtml(port))
+  })
+
+  fastify.get('/governance', async (_req, reply) => {
+    reply.type('text/html').send(renderGovernanceHtml())
+  })
+
+  fastify.get('/laforge-governance.js', async (_req, reply) => {
+    const body = await fs.readFile(governanceBundlePath, 'utf8')
+    reply.type('application/javascript').send(body)
+  })
+
+  fastify.get('/laforge-audit-integrity.js', async (_req, reply) => {
+    const body = await fs.readFile(auditIntegrityBundlePath, 'utf8')
+    reply.type('application/javascript').send(body)
   })
 
   fastify.get('/health', async (_req, reply) => {
@@ -394,24 +418,8 @@ export async function buildStudioServer(opts: { baseDir?: string; port?: number 
   })
 
   fastify.get('/api/drift', async (_request, reply) => {
-    const compiledPath = path.join(baseDir, 'generated', 'compiled.json')
-    const dbPath = path.join(baseDir, '.laforge', 'db.sqlite')
-    try {
-      await fs.access(compiledPath)
-    } catch {
-      reply.send({ enabled: false, reason: 'compiled.json not found', compiledPath })
-      return
-    }
-    try {
-      await fs.access(dbPath)
-    } catch {
-      reply.send({ enabled: false, reason: 'database not found', dbPath })
-      return
-    }
-    const compiled = JSON.parse(await fs.readFile(compiledPath, 'utf8')) as CompilationOutput
-    const db = new DatabaseConnection(dbPath)
-    const drift = await detectDrift(db, compiled)
-    reply.send({ enabled: true, dbPath, compiledPath, drift })
+    const snapshot = await computeDriftSnapshot(baseDir)
+    reply.send(snapshot)
   })
 
   fastify.get('/api/migrations', async (request, reply) => {
@@ -431,6 +439,100 @@ export async function buildStudioServer(opts: { baseDir?: string; port?: number 
       })),
     )
     reply.send({ branch, items })
+  })
+
+  fastify.get('/api/incidents/stream', async (request, reply) => {
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+    })
+    reply.raw.flushHeaders?.()
+    reply.raw.write('\n')
+
+    const send = (event: string, payload: unknown) => {
+      reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`)
+    }
+
+    let closed = false
+    const close = () => {
+      if (closed) return
+      closed = true
+      clearInterval(heartbeatTimer)
+      clearInterval(auditTimer)
+      clearInterval(driftTimer)
+      clearInterval(historyTimer)
+      reply.raw.end()
+    }
+    request.raw.on('close', close)
+    request.raw.on('error', close)
+
+    let lastAuditId: string | null = null
+    let lastHistoryId: string | null = null
+
+    const pollAudit = async () => {
+      if (closed) return
+      try {
+        const entries = await listAuditEntries({}, { baseDir, limit: 20 })
+        if (!entries.length) return
+        if (!lastAuditId) {
+          lastAuditId = entries[0].id
+          send('audit_snapshot', entries)
+          return
+        }
+        const newest = entries[0].id
+        if (newest === lastAuditId) return
+        const reversed = entries.slice().reverse()
+        const fresh: typeof entries = []
+        for (const entry of reversed) {
+          if (entry.id === lastAuditId) {
+            break
+          }
+          fresh.push(entry)
+        }
+        lastAuditId = newest
+        fresh.forEach(entry => send('audit_event', entry))
+      } catch (err: any) {
+        send('incident_error', { source: 'audit', message: err?.message || String(err) })
+      }
+    }
+
+    const pollDrift = async () => {
+      if (closed) return
+      try {
+        const snapshot = await computeDriftSnapshot(baseDir)
+        send('drift_status', { timestamp: new Date().toISOString(), snapshot })
+      } catch (err: any) {
+        send('incident_error', { source: 'drift', message: err?.message || String(err) })
+      }
+    }
+
+    const pollHistory = async () => {
+      if (closed) return
+      try {
+        const branch = await getCurrentBranch(baseDir)
+        const entries = await listHistoryEntries(baseDir, { branch })
+        if (!entries.length) return
+        if (!lastHistoryId) {
+          lastHistoryId = entries[0].id
+          return
+        }
+        const newest = entries[0].id
+        if (newest === lastHistoryId) return
+        lastHistoryId = newest
+        const entry = entries[0]
+        send('policy_event', { entry, branch })
+      } catch (err: any) {
+        send('incident_error', { source: 'policy', message: err?.message || String(err) })
+      }
+    }
+
+    const heartbeatTimer = setInterval(() => send('heartbeat', { ts: Date.now() }), 15000)
+    const auditTimer = setInterval(pollAudit, 4000)
+    const driftTimer = setInterval(pollDrift, 15000)
+    const historyTimer = setInterval(pollHistory, 6000)
+
+    await Promise.allSettled([pollAudit(), pollDrift(), pollHistory()])
   })
 
   fastify.post('/api/migrations/rollback', async (request, reply) => {
@@ -663,7 +765,10 @@ function renderHtml(port: number): string {
   <body>
     <header>
       <div class="brand">LaForge Studio - Time Travel</div>
-      <div class="pill"><span>Port</span><strong>${port}</strong></div>
+      <div class="row" style="gap:8px; align-items:center;">
+        <a class="pill" href="/governance" target="_blank" style="text-decoration:none;">Governance Suite</a>
+        <div class="pill"><span>Port</span><strong>${port}</strong></div>
+      </div>
     </header>
     <section class="hero">
       <h1 class="hero-title">Branch-aware timeline for your domain.</h1>
@@ -697,95 +802,7 @@ function renderHtml(port: number): string {
         <div class="timeline" id="timeline"></div>
       </section>
 
-      <section class="panel stack">
-        <div class="row" style="justify-content:space-between; align-items:center;">
-          <h2 style="margin:0;">Audit Trail</h2>
-          <button class="btn-ghost" id="refresh-audit">Refresh</button>
-        </div>
-        <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); gap:8px;">
-          <input id="audit-tenant" placeholder="tenant" />
-          <input id="audit-user" placeholder="user id" />
-          <input id="audit-model" placeholder="model" />
-          <input id="audit-action" placeholder="action" />
-          <input id="audit-type" placeholder="type (decrypt/pii)" />
-          <input id="audit-since" placeholder="since (e.g., 1h)" />
-          <input id="audit-limit" placeholder="limit" value="50" />
-        </div>
-        <div class="row" style="gap:8px; flex-wrap:wrap;">
-          <button class="btn-ghost" id="audit-filter-decrypt">Decrypts</button>
-          <button class="btn-ghost" id="audit-filter-pii">PII denied</button>
-        </div>
-        <div style="overflow:auto; max-height:360px;">
-          <table class="table">
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>Tenant</th>
-                <th>User</th>
-                <th>Model</th>
-                <th>Action</th>
-                <th>Data</th>
-              </tr>
-            </thead>
-            <tbody id="audit-rows">
-              <tr><td colspan="6" class="muted">No audit entries yet.</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <div id="audit-drawer" style="position:fixed; inset:0; display:none; background:rgba(0,0,0,0.6); backdrop-filter:blur(6px); z-index:50; align-items:center; justify-content:center;">
-        <div style="background:#0b1022; border:1px solid var(--border); border-radius:12px; padding:16px; width: min(720px, 92vw); max-height:80vh; overflow:auto;">
-          <div class="row" style="justify-content:space-between; align-items:center;">
-            <h2 style="margin:0;">Decrypt details</h2>
-            <button class="btn-ghost" id="audit-drawer-close">Close</button>
-          </div>
-          <div id="audit-drawer-body" class="diff" style="white-space:normal; margin-top:12px; background:#0f172a; padding:12px; border-radius:12px;"></div>
-        </div>
-      </div>
-
-      <section class="panel stack">
-        <div class="row" style="justify-content:space-between; align-items:center;">
-          <h2 style="margin:0;">Integrity</h2>
-          <button class="btn-ghost" id="refresh-integrity">Refresh</button>
-        </div>
-        <div class="grid" id="kms-cards" style="grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap:8px; margin-bottom:8px;"></div>
-        <div id="integrity-summary" class="muted">Chain not verified yet.</div>
-        <div class="grid" id="provenance-cards" style="grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:8px;"></div>
-        <div class="row" style="gap:10px; flex-wrap:wrap; align-items:center;">
-          <label style="display:flex; align-items:center; gap:6px;"><input id="guard-signed" type="checkbox" checked /> <span class="muted">Require signed</span></label>
-          <label style="display:flex; align-items:center; gap:6px;"><input id="guard-approved" type="checkbox" checked /> <span class="muted">Require approved</span></label>
-          <label style="display:flex; align-items:center; gap:6px;"><input id="guard-provenance" type="checkbox" checked /> <span class="muted">Require provenance</span></label>
-        </div>
-        <div class="grid" id="deploy-guard" style="grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:8px; margin-top:8px;"></div>
-        <div class="card" style="margin-top:8px;">
-          <div class="row" style="justify-content:space-between; align-items:center;">
-            <div><div class="muted" style="font-size:12px;">Rotate enc2 tokens</div><div style="font-weight:700;">KMS rotation</div></div>
-            <button class="btn-ghost" id="kms-rotate">Rotate</button>
-          </div>
-          <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(160px,1fr)); gap:8px; margin-top:8px;">
-            <input id="kms-provider" placeholder="provider (aws|azure|gcp|vault|local)" />
-            <input id="kms-version" placeholder="target version (e.g., v2)" />
-          </div>
-          <textarea id="kms-tokens" rows="3" placeholder="enc2 tokens (one per line)" style="margin-top:8px; width:100%;"></textarea>
-          <div id="kms-rotate-status" class="muted" style="margin-top:6px;">No rotation yet.</div>
-        </div>
-        <div style="overflow:auto; max-height:280px;">
-          <table class="table">
-            <thead>
-              <tr>
-                <th>Snapshot</th>
-                <th>Hash</th>
-                <th>Signature</th>
-                <th>Approvals</th>
-              </tr>
-            </thead>
-            <tbody id="integrity-rows">
-              <tr><td colspan="4" class="muted">No integrity data.</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
+      <div id="laforge-audit-integrity-root"></div>
 
       <section class="panel stack">
         <div class="row" style="justify-content:space-between; align-items:center;">
@@ -843,11 +860,6 @@ function renderHtml(port: number): string {
           <button class="btn-accent" id="diff-btn">Diff</button>
         </div>
         <div class="grid" id="summary-cards"></div>
-        <div>
-          <h3 style="margin:12px 0 6px;">Schema Diff</h3>
-          <pre class="diff" id="diff-viewer">Select two snapshots to view the diff.</pre>
-        </div>
-        <div>
           <h3 style="margin:12px 0 6px;">Policy/RLS Impact</h3>
           <div id="policy-impact" class="grid" style="grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:8px;"></div>
         </div>
@@ -859,6 +871,15 @@ function renderHtml(port: number): string {
           <h3 style="margin:12px 0 6px;">ERD</h3>
           <div id="erd-canvas" style="width:100%; min-height:240px; border:1px solid var(--border); border-radius:12px; padding:12px; background:#0b1020;"></div>
           <div id="erd-detail" class="muted" style="margin-top:8px; font-size:12px;">Select a table to see details.</div>
+        </div>
+      </section>
+      <section class="panel stack" id="operator-mode-panel">
+        <div class="row" style="justify-content:space-between; align-items:center;">
+          <h2 style="margin:0;">Operator Mode</h2>
+          <a class="btn-ghost" href="/governance" target="_blank">Open fullscreen</a>
+        </div>
+        <div id="laforge-governance-root" style="border:1px solid var(--border); border-radius:14px; min-height:320px; padding:12px;">
+          <div class="muted">Loading governance console…</div>
         </div>
       </section>
     </main>
@@ -882,39 +903,13 @@ function renderHtml(port: number): string {
       const summaryCards = document.getElementById('summary-cards');
       const replayBtn = document.getElementById('replay-btn');
       const cherryBtn = document.getElementById('cherry-btn');
-      const auditRows = document.getElementById('audit-rows');
-      const auditTenant = document.getElementById('audit-tenant');
-      const auditUser = document.getElementById('audit-user');
-      const auditModel = document.getElementById('audit-model');
-      const auditAction = document.getElementById('audit-action');
-      const auditType = document.getElementById('audit-type');
-      const auditSince = document.getElementById('audit-since');
-      const auditLimit = document.getElementById('audit-limit');
-      const auditFilterDecrypt = document.getElementById('audit-filter-decrypt');
-      const auditFilterPii = document.getElementById('audit-filter-pii');
-      const kmsProvider = document.getElementById('kms-provider');
-      const kmsVersion = document.getElementById('kms-version');
-      const kmsTokens = document.getElementById('kms-tokens');
-      const kmsRotateBtn = document.getElementById('kms-rotate');
-      const kmsRotateStatus = document.getElementById('kms-rotate-status');
       const erdCanvas = document.getElementById('erd-canvas');
       const erdDetail = document.getElementById('erd-detail');
       const blameBtn = document.getElementById('show-blame');
-      const integrityRows = document.getElementById('integrity-rows');
-      const kmsCards = document.getElementById('kms-cards');
-      const integritySummary = document.getElementById('integrity-summary');
-      const auditDrawer = document.getElementById('audit-drawer');
-      const auditDrawerBody = document.getElementById('audit-drawer-body');
-      const auditDrawerClose = document.getElementById('audit-drawer-close');
-      const provenanceCards = document.getElementById('provenance-cards');
-      const guardSigned = document.getElementById('guard-signed');
-      const guardApproved = document.getElementById('guard-approved');
-      const guardProvenance = document.getElementById('guard-provenance');
       const approvalRows = document.getElementById('approval-rows');
       const driftCards = document.getElementById('drift-cards');
       const migrationRows = document.getElementById('migration-rows');
       const policyImpact = document.getElementById('policy-impact');
-      const deployGuard = document.getElementById('deploy-guard');
 
       function escapeHtml(value) {
         return String(value ?? '')
@@ -931,159 +926,6 @@ function renderHtml(port: number): string {
         return res.json();
       }
 
-      async function loadAudit() {
-        const params = new URLSearchParams();
-        if (auditTenant.value) params.append('tenant', auditTenant.value);
-        if (auditUser.value) params.append('user', auditUser.value);
-        if (auditModel.value) params.append('model', auditModel.value);
-        if (auditAction.value) params.append('action', auditAction.value);
-        if (auditType.value) params.append('type', auditType.value);
-        if (auditSince.value) params.append('since', auditSince.value);
-        const limitVal = Number(auditLimit.value) || 50;
-        params.append('limit', String(limitVal));
-        const data = await fetchJSON('/api/audit?' + params.toString());
-        renderAudit(data.entries || []);
-      }
-
-      function renderAudit(entries) {
-        auditRows.innerHTML = '';
-        if (!entries.length) {
-          auditRows.innerHTML = '<tr><td colspan="6" class="muted">No audit entries found.</td></tr>';
-          return;
-        }
-        entries.forEach(entry => {
-          const tr = document.createElement('tr');
-          const time = new Date(entry.timestamp).toLocaleString();
-          tr.innerHTML = \`
-            <td>\${time}</td>
-            <td>\${entry.tenantId || ''}</td>
-            <td>\${entry.userId || ''}\${entry.requestId ? \`<div class="muted">req \${entry.requestId}</div>\` : ''}</td>
-            <td>\${entry.model || ''}</td>
-            <td>\${entry.type}</td>
-            <td style="max-width:280px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">\${entry.data ? JSON.stringify(entry.data) : (entry.artifactHash || '')}</td>
-          \`;
-          if (entry.type === 'decrypt' && entry.data) {
-            tr.style.cursor = 'pointer';
-            tr.onclick = () => openDecryptDetails(entry);
-          }
-          auditRows.appendChild(tr);
-        });
-      }
-
-      async function loadIntegrity() {
-        const data = await fetchJSON('/api/integrity?branch=' + encodeURIComponent(currentBranch));
-        renderIntegrity(data);
-        loadProvenance().catch(err => console.error(err));
-        loadApprovals().catch(err => console.error(err));
-        loadDrift().catch(err => console.error(err));
-        loadMigrations().catch(err => console.error(err));
-        loadDeployGuard().catch(err => console.error(err));
-        loadKms().catch(err => console.error(err));
-      }
-
-      function renderIntegrity(data) {
-        if (!data || !data.snapshots) {
-          integritySummary.textContent = 'No integrity data.';
-          integrityRows.innerHTML = '<tr><td colspan="4" class="muted">No integrity data.</td></tr>';
-          return;
-        }
-        const chainOk = data.chain?.ok;
-        const unsigned = (data.chain?.unsigned || []).length;
-        integritySummary.innerHTML = chainOk
-          ? '<span class="status-ok">Chain verified.</span> Unsigned: ' + unsigned
-          : '<span class="status-bad">Chain broken' + (data.chain?.brokenAt ? ' at ' + data.chain.brokenAt : '') + '.</span>';
-
-        integrityRows.innerHTML = '';
-        if (!data.snapshots.length) {
-          integrityRows.innerHTML = '<tr><td colspan="4" class="muted">No snapshots.</td></tr>';
-          return;
-        }
-        data.snapshots.forEach(snap => {
-          const sig = snap.verified ? '<span class="status-ok">verified</span>' : '<span class="status-warn">unsigned</span>';
-          const approvals = snap.approvals?.length || 0;
-          const row = document.createElement('tr');
-          row.innerHTML =
-            '<td>' +
-            snap.id +
-            '</td><td style=\"font-family: \\'JetBrains Mono\\', monospace; font-size:11px;\">' +
-            (snap.hash || '') +
-            '</td><td>' +
-            sig +
-            '</td><td>' +
-            (approvals ? approvals + ' entries' : 'none') +
-            '</td>';
-          integrityRows.appendChild(row);
-        });
-      }
-
-      async function loadProvenance() {
-        const data = await fetchJSON('/api/provenance');
-        renderProvenance(data);
-      }
-
-      function renderProvenance(data) {
-        provenanceCards.innerHTML = '';
-        if (!data || data.ok === undefined) {
-          provenanceCards.innerHTML = '<div class="card muted">Provenance not available.</div>';
-          return;
-        }
-        const status = data.ok ? '<span class="status-ok">verified</span>' : '<span class="status-bad">tampered</span>';
-        const items = [
-          { label: 'Status', value: status },
-          { label: 'Expected hash', value: data.expectedHash || 'n/a' },
-          { label: 'Actual hash', value: data.actualHash || 'n/a' },
-          { label: 'Compiled path', value: data.compiledPath || 'generated/compiled.json' },
-          { label: 'Provenance path', value: data.provenancePath || '.laforge/provenance.json' },
-        ];
-        items.forEach(item => {
-          const div = document.createElement('div');
-          div.className = 'card';
-          div.innerHTML = \`<div class="muted" style="font-size:11px; text-transform:uppercase;">\${item.label}</div><div style="font-size:13px; font-family:'JetBrains Mono', monospace;">\${item.value}</div>\`;
-        provenanceCards.appendChild(div);
-        });
-
-        // deploy guard status
-        renderDeployGuard({ ok: data.ok, reason: data.ok ? '' : 'provenance', results: { provenance: data } });
-      }
-
-      async function loadDeployGuard() {
-        const params = new URLSearchParams();
-        params.append('branch', currentBranch);
-        params.append('requireSigned', (guardSigned as any)?.checked ? 'true' : 'false');
-        params.append('requireApproved', (guardApproved as any)?.checked ? 'true' : 'false');
-        params.append('requireProvenance', (guardProvenance as any)?.checked ? 'true' : 'false');
-        try {
-          const res = await fetchJSON('/api/deploy/verify?' + params.toString());
-          renderDeployGuard({ ok: res.ok !== false, reason: res.reason, results: res.results });
-        } catch (err) {
-          renderDeployGuard({ ok: false, reason: 'guard failed' });
-        }
-      }
-
-      function renderDeployGuard(status) {
-        deployGuard.innerHTML = '';
-        const card = document.createElement('div');
-        card.className = 'card';
-        const signed = status.results?.signed?.ok ? '<span class="status-ok">signed</span>' : '<span class="status-warn">unsigned</span>';
-        const approved = status.results?.approved?.ok ? '<span class="status-ok">approved</span>' : '<span class="status-warn">pending</span>';
-        const prov = status.results?.provenance?.ok ? '<span class="status-ok">provenance ok</span>' : '<span class="status-bad">provenance fail</span>';
-        card.innerHTML = \`
-          <div class="muted" style="font-size:11px; text-transform:uppercase;">Deploy Guard</div>
-          <div style="font-size:18px; font-weight:700;">\${status.ok ? 'ready' : 'blocked'}</div>
-          <div class="muted" style="font-size:12px;">\${status.reason || ''}</div>
-          <div class="row" style="gap:8px; margin-top:6px;">
-            <span class="badge">\${signed}</span>
-            <span class="badge">\${approved}</span>
-            <span class="badge">\${prov}</span>
-          </div>
-          <div class="row-actions" style="margin-top:8px;">
-            <button class="btn-ghost" id="verify-deploy">Verify now</button>
-          </div>
-        \`;
-        deployGuard.appendChild(card);
-        document.getElementById('verify-deploy')?.addEventListener('click', loadDeployGuard);
-      }
-
       async function loadApprovals() {
         const data = await fetchJSON('/api/approvals?branch=' + encodeURIComponent(currentBranch));
         renderApprovals(data.items || []);
@@ -1097,7 +939,6 @@ function renderHtml(port: number): string {
           body: JSON.stringify({ id, decision, reason }),
         });
         await loadApprovals();
-        await loadIntegrity();
       }
 
       function renderApprovals(items) {
@@ -1135,118 +976,10 @@ function renderHtml(port: number): string {
         });
       }
 
-      async function loadKms() {
-        try {
-          const data = await fetchJSON('/api/kms/health');
-          renderKms(data);
-        } catch (err) {
-          renderKms({ ok: false, message: (err && err.message) || 'KMS health failed' });
-        }
-      }
-
-      function renderKms(data) {
-        kmsCards.innerHTML = '';
-        const ok = data?.ok;
-        const provider = data?.provider || 'unknown';
-        const version = data?.version || 'v1';
-        const status = ok ? '<span class="status-ok">healthy</span>' : '<span class="status-bad">unhealthy</span>';
-        const msg = data?.message || (ok ? 'KMS reachable' : 'Check master key / provider config');
-        const card = document.createElement('div');
-        card.className = 'card';
-        card.innerHTML = \`
-          <div class="row" style="justify-content:space-between; align-items:center;">
-            <div><div class="muted" style="font-size:12px;">Provider</div><div style="font-weight:700; font-size:16px;">\${provider}</div></div>
-            <div class="badge">\${status}</div>
-          </div>
-          <div class="muted" style="margin-top:6px;">Version: \${version}</div>
-          <div class="muted" style="margin-top:4px; font-size:12px;">\${msg}</div>
-        \`;
-        kmsCards.appendChild(card);
-      }
-
-      async function rotateKmsTokens() {
-        const tokens = (kmsTokens.value || '')
-          .split(/\\r?\\n/)
-          .map(l => l.trim())
-          .filter(Boolean);
-        if (!tokens.length) {
-          kmsRotateStatus.textContent = 'Provide enc2 tokens to rotate.';
-          return;
-        }
-        kmsRotateStatus.textContent = 'Rotating...';
-        try {
-          const body = {
-            tokens,
-            provider: kmsProvider.value || undefined,
-            version: kmsVersion.value || undefined,
-          };
-          const res = await fetch('/api/kms/rotate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-          if (!res.ok) {
-            const text = await res.text();
-            throw new Error(text || 'Rotation failed');
-          }
-          const data = await res.json();
-          kmsTokens.value = (data.rotated || []).join('\\n');
-          kmsRotateStatus.innerHTML = \`<span class="status-ok">Rotated \${tokens.length} tokens with \${data.provider} v\${data.version}</span>\`;
-          loadAudit().catch(() => {});
-        } catch (err) {
-          kmsRotateStatus.innerHTML = \`<span class="status-bad">\${err?.message || err}</span>\`;
-        }
-      }
-
-      function openDecryptDetails(entry) {
-        const abac = entry.data?.abac || {};
-        const residency = entry.data?.residency || {};
-        const trace = abac.trace || [];
-        const kmsInfo = entry.data?.kms ? \`\${entry.data.kms} \${entry.data.keyVersion ? 'v' + entry.data.keyVersion : ''}\` : 'unknown';
-        const traceHtml = trace.length
-          ? '<ul style="margin:6px 0 0 14px; padding:0;">' +
-            trace
-              .map(
-                t =>
-                  \`<li style="margin-bottom:4px;"><strong>\${escapeHtml(t.rule || '')}</strong> → \${escapeHtml(t.result || 'unknown')}<div class="muted">\${escapeHtml(t.detail || '')}</div></li>\`,
-              )
-              .join('') +
-            '</ul>'
-          : '<div class="muted">No ABAC trace recorded.</div>';
-        const residencyHtml = \`
-          <div><strong>Enforced:</strong> \${escapeHtml(residency.enforced ?? 'none')}</div>
-          <div><strong>Violated:</strong> \${residency.violated ? 'yes' : 'no'}</div>
-          \${residency.source ? '<div class="muted">Source: ' + escapeHtml(residency.source) + '</div>' : ''}
-        \`;
-        auditDrawerBody.innerHTML = \`
-          <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:8px;">
-            <div class="card"><div class="muted" style="font-size:11px; text-transform:uppercase;">Guard path</div><div style="font-weight:700;">\${escapeHtml(entry.data?.guardPath || '(unknown)')}</div></div>
-            <div class="card"><div class="muted" style="font-size:11px; text-transform:uppercase;">KMS</div><div style="font-weight:700;">\${escapeHtml(kmsInfo)}</div></div>
-            <div class="card"><div class="muted" style="font-size:11px; text-transform:uppercase;">User</div><div>\${escapeHtml(entry.userId || 'unknown')}</div></div>
-            <div class="card"><div class="muted" style="font-size:11px; text-transform:uppercase;">Tenant</div><div>\${escapeHtml(entry.tenantId || 'default')}</div></div>
-          </div>
-          <div class="card" style="margin-top:8px;">
-            <div class="muted" style="font-size:11px; text-transform:uppercase;">Why was this decrypted?</div>
-            <div style="font-weight:700; margin-top:6px;">\${escapeHtml(abac.reason || 'Guard allowed read')}</div>
-            <div class="muted" style="margin-top:4px;">Result: \${escapeHtml(abac.result || 'unknown')}</div>
-            \${abac.expression ? '<div class="muted" style="margin-top:4px;">Expr: ' + escapeHtml(abac.expression) + '</div>' : ''}
-          </div>
-          <div class="card" style="margin-top:8px;">
-            <div class="muted" style="font-size:11px; text-transform:uppercase;">ABAC Trace</div>
-            \${traceHtml}
-          </div>
-          <div class="card" style="margin-top:8px;">
-            <div class="muted" style="font-size:11px; text-transform:uppercase;">Residency outcome</div>
-            \${residencyHtml}
-          </div>
-          <div class="card" style="margin-top:8px;">
-            <div class="muted" style="font-size:11px; text-transform:uppercase;">Raw event</div>
-            <pre style="white-space:pre-wrap; margin-top:6px;">\${escapeHtml(JSON.stringify(entry, null, 2))}</pre>
-          </div>
-        \`;
-        auditDrawer.style.display = 'flex';
-      }
-
-      async function loadDrift() {
-        const data = await fetchJSON('/api/drift');
-        renderDrift(data);
-      }
+     async function loadDrift() {
+       const data = await fetchJSON('/api/drift');
+       renderDrift(data);
+     }
 
       function renderDrift(data) {
         driftCards.innerHTML = '';
@@ -1367,7 +1100,6 @@ function renderHtml(port: number): string {
         await fetchJSON('/api/branches/switch', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name }) });
         await loadBranches();
         await loadTimeline();
-        await loadIntegrity();
       }
 
       async function createBranch() {
@@ -1377,7 +1109,6 @@ function renderHtml(port: number): string {
         newBranchInput.value = '';
         await loadBranches();
         await loadTimeline();
-        await loadIntegrity();
       }
 
       async function loadTimeline() {
@@ -1613,32 +1344,101 @@ function renderHtml(port: number): string {
       document.getElementById('switch-branch').onclick = switchBranch;
       document.getElementById('create-branch').onclick = createBranch;
       document.getElementById('refresh-branches').onclick = async () => { await loadBranches(); await loadTimeline(); };
-      document.getElementById('refresh-audit').onclick = loadAudit;
-      document.getElementById('refresh-integrity').onclick = loadIntegrity;
       document.getElementById('refresh-ops').onclick = async () => { await loadApprovals(); await loadDrift(); await loadMigrations(); };
       document.getElementById('diff-btn').onclick = diffSelected;
       replayBtn.onclick = replayEntry;
       cherryBtn.onclick = cherryPick;
       document.getElementById('erd-refresh').onclick = () => loadErd(entrySelect.value);
-      kmsRotateBtn.onclick = rotateKmsTokens;
       blameBtn.onclick = () => blameDsl(entrySelect.value, compareSelect.value);
-      auditFilterDecrypt.onclick = () => { auditType.value = 'decrypt'; loadAudit(); };
-      auditFilterPii.onclick = () => { auditType.value = 'pii_reveal_denied'; loadAudit(); };
-      auditDrawerClose.onclick = () => { auditDrawer.style.display = 'none'; };
-      auditDrawer.onclick = (e) => { if (e.target === auditDrawer) auditDrawer.style.display = 'none'; };
 
       (async () => {
         await loadBranches();
         await loadTimeline();
-        await loadAudit();
-        await loadIntegrity();
         await diffSelected();
         await loadApprovals();
         await loadDrift();
         await loadMigrations();
-        await loadDeployGuard();
       })();
     </script>
+    <script type="module" src="/laforge-governance.js"></script>
+    <script type="module" src="/laforge-audit-integrity.js"></script>
+  </body>
+</html>`
+}
+
+async function ensureGovernanceBundles(): Promise<{ governanceBundlePath: string; auditIntegrityBundlePath: string }> {
+  const bundleDir = path.resolve('.laforge', 'studio')
+  await fs.mkdir(bundleDir, { recursive: true })
+  const entries = [
+    {
+      entry: path.resolve('packages/cli/studioHarnessClient.tsx'),
+      outfile: path.join(bundleDir, 'governance.bundle.js'),
+    },
+    {
+      entry: path.resolve('packages/cli/studioAuditIntegrityClient.tsx'),
+      outfile: path.join(bundleDir, 'audit-integrity.bundle.js'),
+    },
+  ]
+  for (const cfg of entries) {
+    await esbuildBuild({
+      entryPoints: [cfg.entry],
+      bundle: true,
+      format: 'esm',
+      platform: 'browser',
+      target: ['es2020'],
+      outfile: cfg.outfile,
+      sourcemap: false,
+      logLevel: 'silent',
+    })
+  }
+  return {
+    governanceBundlePath: entries[0].outfile,
+    auditIntegrityBundlePath: entries[1].outfile,
+  }
+}
+
+async function computeDriftSnapshot(baseDir: string): Promise<DriftSnapshot> {
+  const compiledPath = path.join(baseDir, 'generated', 'compiled.json')
+  const dbPath = path.join(baseDir, '.laforge', 'db.sqlite')
+  try {
+    await fs.access(compiledPath)
+  } catch {
+    return { enabled: false, reason: 'compiled.json not found', compiledPath }
+  }
+  try {
+    await fs.access(dbPath)
+  } catch {
+    return { enabled: false, reason: 'database not found', dbPath }
+  }
+  const compiled = JSON.parse(await fs.readFile(compiledPath, 'utf8')) as CompilationOutput
+  const db = new DatabaseConnection(dbPath)
+  try {
+    const drift = await detectDrift(db, compiled)
+    return { enabled: true, dbPath, compiledPath, drift }
+  } catch (err) {
+    return { enabled: false, reason: (err as any)?.message || 'drift computation failed', dbPath, compiledPath }
+  } finally {
+    db.close()
+  }
+}
+
+function renderGovernanceHtml(): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>LaForge Governance Suite</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+      body { margin:0; background:#05060c; color:#e5e7eb; font-family:'Space Grotesk', system-ui, -apple-system, sans-serif; }
+      a { color:#00d2ff; }
+    </style>
+  </head>
+  <body>
+    <div id="laforge-governance-root"></div>
+    <script type="module" src="/laforge-governance.js"></script>
   </body>
 </html>`
 }

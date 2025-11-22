@@ -14,7 +14,7 @@ export interface ChaosUser {
 
 export interface ChaosCase {
   model: string;
-  operation: 'create' | 'read' | 'update' | 'delete' | 'list';
+  operation: 'create' | 'read' | 'update' | 'delete' | 'list' | 'findById';
   user: ChaosUser;
   data?: any;
   expect: ChaosExpectation;
@@ -30,7 +30,11 @@ export async function runPolicyChaos(runtime: LaForgeRuntime, tests: ChaosCase[]
   const failures: ChaosResult['failures'] = [];
 
   for (const t of tests) {
-    const res = await runtime.execute(t.model, t.operation, t.user, t.data);
+    const mappedOperation =
+      t.operation === 'read'
+        ? 'findById'
+        : t.operation;
+    const res = await runtime.execute(t.model, mappedOperation, t.user, t.data);
     const shouldAllow = t.expect === 'allow';
     if (shouldAllow !== res.success) {
       failures.push({ test: t, result: { success: res.success, error: res.error } });

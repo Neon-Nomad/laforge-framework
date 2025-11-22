@@ -1,13 +1,18 @@
 import React from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
-import { rest } from 'msw';
+import { http, HttpResponse } from 'msw';
 import { setupServer } from 'msw/node';
 import { StudioHarness } from './TestHarness';
+import { act } from 'react';
 
 const server = setupServer(
-  rest.get('/api/audit', (_req, res, ctx) => res(ctx.json({ entries: [] }))),
-  rest.get('/api/kms/health', (_req, res, ctx) => res(ctx.json({ provider: 'vault', version: 'v5', ok: true }))),
-  rest.get('/api/integrity', (_req, res, ctx) => res(ctx.json({ chain: { ok: true }, snapshots: [] }))),
+  http.get('/api/audit', () => HttpResponse.json({ entries: [] })),
+  http.get('/api/kms/health', () => HttpResponse.json({ provider: 'vault', version: 'v5', ok: true })),
+  http.get('/api/integrity', () => HttpResponse.json({ chain: { ok: true }, snapshots: [] })),
+  http.get('/api/approvals', () => HttpResponse.json({ items: [] })),
+  http.post('/api/approvals/decision', () => HttpResponse.json({ ok: true })),
+  http.get('/api/drift', () => HttpResponse.json({ enabled: false, reason: 'disabled' })),
+  http.get('/api/deploy/verify', () => HttpResponse.json({ ok: true, results: { signed: { ok: true }, approved: { ok: true }, provenance: { ok: true } } })),
 );
 
 beforeAll(() => server.listen());
@@ -16,7 +21,9 @@ afterAll(() => server.close());
 
 describe('Integrity panel', () => {
   it('shows kms health and chain status', async () => {
-    render(<StudioHarness />);
+    await act(async () => {
+      render(<StudioHarness />);
+    });
     await waitFor(() => expect(screen.getByLabelText('kms-health')).toHaveTextContent('vault'));
     expect(screen.getByLabelText('kms-health')).toHaveTextContent('v5');
     await waitFor(() => expect(screen.getByLabelText('integrity-status')).toHaveTextContent('chain-ok'));

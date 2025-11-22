@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { setupServer } from 'msw/node';
 import { StudioHarness } from './TestHarness';
+import { act } from 'react';
 
 const decryptEntry = {
   id: 'a1',
@@ -38,12 +39,10 @@ const server = setupServer(
   }),
   http.get('/api/kms/health', () => HttpResponse.json({ provider: 'aws', version: 'v2', ok: true })),
   http.get('/api/integrity', () => HttpResponse.json({ chain: { ok: true } })),
-    const type = req.url.searchParams.get('type');
-    const entries = type === 'decrypt' ? [decryptEntry] : [otherEntry];
-    return res(ctx.json({ entries }));
-  }),
-  rest.get('/api/kms/health', (_req, res, ctx) => res(ctx.json({ provider: 'aws', version: 'v2', ok: true }))),
-  rest.get('/api/integrity', (_req, res, ctx) => res(ctx.json({ chain: { ok: true } }))),
+  http.get('/api/approvals', () => HttpResponse.json({ items: [] })),
+  http.post('/api/approvals/decision', () => HttpResponse.json({ ok: true })),
+  http.get('/api/drift', () => HttpResponse.json({ enabled: false, reason: 'disabled' })),
+  http.get('/api/deploy/verify', () => HttpResponse.json({ ok: true, results: { signed: { ok: true }, approved: { ok: true }, provenance: { ok: true } } })),
 );
 
 beforeAll(() => server.listen());
@@ -52,15 +51,20 @@ afterAll(() => server.close());
 
 describe('Audit explainability drawer', () => {
   it('filters decrypts and shows explainability details', async () => {
-    render(<StudioHarness />);
+    await act(async () => {
+      render(<StudioHarness />);
+    });
 
-    await userEvent.click(screen.getByText('Decrypts'));
+    await act(async () => {
+      await userEvent.click(screen.getByText('Decrypts'));
+    });
 
-    await waitFor(() => expect(screen.getAllByRole('row').length).toBeGreaterThan(0));
-    expect(screen.getAllByRole('row')[0]).toHaveTextContent('decrypt');
+    await waitFor(() => expect(screen.getByText('decrypt')).toBeInTheDocument());
 
     const row = screen.getByText('decrypt').closest('tr') as HTMLElement;
-    await userEvent.click(row);
+    await act(async () => {
+      await userEvent.click(row);
+    });
 
     await waitFor(() => expect(screen.getByTestId('guard-path')).toBeInTheDocument());
     expect(screen.getByTestId('guard-path')).toHaveTextContent('Post.read');

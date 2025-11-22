@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import Fastify from 'fastify';
+import Fastify, { type FastifyRequest } from 'fastify';
 import { applySecurityHeaders, createRateLimiter, createWafShield, parseRateLimit } from '../http/controls.js';
 
 describe('rate limit parsing', () => {
@@ -25,7 +25,7 @@ describe('rate limiter + WAF middleware', () => {
     server.addHook('preHandler', createWafShield());
     server.addHook('onSend', applySecurityHeaders());
     server.get('/ping', async () => ({ ok: true }));
-    server.post('/echo', async request => ({ body: request.body }));
+    server.post('/echo', async (request: FastifyRequest<{ Body: unknown }>) => ({ body: request.body }));
   });
 
   it('returns 429 after exceeding limit', async () => {

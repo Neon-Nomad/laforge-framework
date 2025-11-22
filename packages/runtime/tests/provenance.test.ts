@@ -18,11 +18,13 @@ const compiled: CompilationOutput = {
       extensions: [],
     },
   ],
+  ast: '',
   sql: 'create table users(id uuid primary key);',
   zod: 'import * as zod from "zod";\nexport const UserSchema = zod.object({ id: zod.string() });',
   domain: 'module.exports = { userDomain: { create: async () => ({}) } };',
-  config: { db: 'sqlite', dialect: 'postgres-rds', domain: '', outDir: '', audit: false, multiTenant: true },
-  queries: [],
+  rls: '',
+  routes: '',
+  config: { db: 'sqlite', dialect: 'postgres-rds', domain: [], outDir: 'generated', audit: false, multiTenant: true },
   migrations: [],
 };
 

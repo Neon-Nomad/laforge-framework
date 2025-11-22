@@ -1,4 +1,5 @@
-import type { CompilationOutput, ModelDefinition } from '../compiler/index.js';
+import type { CompilationOutput } from '../compiler/index.js';
+import type { ModelDefinition } from '../compiler/ast/types.js';
 import type { DatabaseConnection } from './db/database.js';
 
 interface DriftDiff {
